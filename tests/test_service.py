@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -122,23 +123,31 @@ def test_provider_cooldown_survives_restart(make_settings, make_event):
     assert len(requests) == 1
 
 
-def test_feed_commitments_are_not_hidden_by_legacy_timeline_watermark(
+def test_forecasts_are_not_hidden_by_legacy_timeline_watermark(
     make_settings,
     make_event,
 ):
     settings = make_settings()
     completed = make_event(9, kind="confirmed")
-    committed = make_event(1, kind="committed")
+    forecast = make_event(1)
     payload = {
-        "signal": {
-            "tweet_id": committed.id,
-            "summary": committed.summary,
-            "at": committed.to_dict()["announced_at"],
-            "url": committed.url,
-            "active": True,
-            "kind": "signal",
-        }
+        "official_signal": {
+            "tweet_id": forecast.id,
+            "summary": forecast.summary,
+            "at": forecast.to_dict()["announced_at"],
+            "url": forecast.url,
+            "window": {
+                "label": forecast.window_label,
+                "target_at": forecast.to_dict()["expected_at"],
+            },
+        },
+        "probabilities": {
+            "signal_percent": 93,
+            "rounded_24h": 32,
+            "rounded_48h": 53,
+        },
     }
+    provider = CodexResetProvider(clock=lambda: datetime(2026, 1, 1, 13, tzinfo=UTC))
     with (
         Store(settings.database_path) as store,
         httpx.Client(
@@ -148,19 +157,60 @@ def test_feed_commitments_are_not_hidden_by_legacy_timeline_watermark(
         store.record_snapshot([completed], ["first"], 1000)
         previous = store.heads(["first"])[0]
         store.delivered(previous.id, "first")
-        tracker = Tracker(settings, store, client, clock=Clock())
+        tracker = Tracker(settings, store, client, providers=[provider], clock=Clock())
         assert tracker.poll()
-        assert store.heads(["first"])[0].event == committed
+        assert store.heads(["first"])[0].event == forecast
         assert store._metadata("watermark") == completed.to_dict()["announced_at"]
-        assert store._metadata("committed:watermark") == committed.to_dict()["announced_at"]
+        assert store._metadata("forecast:watermark") == forecast.to_dict()["announced_at"]
     with (
         Store(settings.database_path) as store,
         httpx.Client(
             transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
         ) as client,
     ):
-        assert Tracker(settings, store, client, clock=Clock()).poll()
+        assert Tracker(settings, store, client, providers=[provider], clock=Clock()).poll()
         assert store.pending_count(["first"]) == 1
+
+
+def test_forecast_for_previously_delivered_commitment_sends_probability_after_restart(
+    make_settings,
+    make_event,
+):
+    settings = make_settings()
+    forecast = make_event(1)
+    committed = replace(
+        forecast,
+        kind="committed",
+        probability=None,
+        probability_24h=None,
+        probability_48h=None,
+        window_label=None,
+        expected_at=None,
+    )
+    with Store(settings.database_path) as store:
+        store.record_snapshot([committed], ["first"], 1000, cache_namespace="committed")
+        store.delivered(store.heads(["first"])[0].id, "first")
+        assert store.record_snapshot([forecast], ["first"], 1001, cache_namespace="forecast") == 1
+    requests = []
+    with (
+        Store(settings.database_path) as store,
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: requests.append(request) or httpx.Response(200)
+            )
+        ) as client,
+    ):
+        assert store.heads(["first"])[0].event == forecast
+        assert Tracker(settings, store, client, clock=Clock(1001)).dispatch_due() == (1, 0)
+        updated = replace(forecast, probability=94)
+        assert store.record_snapshot([updated], ["first"], 1002, cache_namespace="forecast") == 0
+    assert len(requests) == 1
+    event = json.loads(requests[0].content)["event"]
+    assert event["kind"] == "forecast"
+    assert event["probability"] == 93
+    assert event["probability_24h"] == 32
+    assert event["probability_48h"] == 53
+    assert event["expected_at"] == forecast.to_dict()["expected_at"]
 
 
 def test_retry_recovery_endpoint_isolation_and_order(make_settings, make_event):

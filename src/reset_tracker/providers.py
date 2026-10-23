@@ -1,4 +1,6 @@
+import math
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Protocol
 
 import httpx
@@ -18,42 +20,95 @@ class Provider(Protocol):
 
 class CodexResetProvider:
     name = "codex_reset"
-    endpoint = "https://codex-reset.com/api/feed"
-    cache_namespace = "committed"
+    endpoint = "https://codex-reset.com/api/forecast"
+    cache_namespace = "forecast"
+
+    def __init__(self, *, clock: Callable[[], datetime] | None = None):
+        self.clock = clock or (lambda: datetime.now(UTC))
 
     def fetch(self, client: httpx.Client) -> list[ResetEvent]:
         response = client.get(self.endpoint)
         response.raise_for_status()
         try:
-            return self.parse(response.json())
+            return self.parse(response.json(), now=self.clock())
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
-            raise ProviderError("invalid feed response") from exc
+            raise ProviderError("invalid forecast response") from exc
 
     @staticmethod
-    def parse(payload: object) -> list[ResetEvent]:
+    def parse(payload: object, *, now: datetime | None = None) -> list[ResetEvent]:
         if not isinstance(payload, dict):
-            raise ValueError("expected a feed object")
-        signal = payload.get("signal")
+            raise ValueError("expected a forecast object")
+        signal = payload.get("official_signal")
         if signal is None:
             return []
         if not isinstance(signal, dict):
-            raise ValueError("expected a signal object or null")
-        if signal.get("active") is not True or signal.get("kind") != "signal":
+            raise ValueError("expected an official_signal object or null")
+        if not signal or signal.get("active") is False:
             return []
         for field in ("tweet_id", "at", "summary", "url"):
             if not isinstance(signal.get(field), str) or not signal[field]:
-                raise ValueError(f"invalid signal field: {field}")
+                raise ValueError(f"invalid official_signal field: {field}")
+        announced_at = parse_timestamp(signal["at"])
+        last_reset = _optional_timestamp(payload.get("last_reset_at"), "last_reset_at")
+        if last_reset is not None and announced_at <= last_reset:
+            return []
+        window = signal.get("window")
+        if window is None:
+            window = {}
+        if not isinstance(window, dict):
+            raise ValueError("invalid official_signal window")
+        target = _optional_timestamp(window.get("target_at"), "window.target_at")
+        end = _optional_timestamp(window.get("end_at"), "window.end_at")
+        deadline = end or target
+        if deadline is not None and deadline <= (now if now is not None else datetime.now(UTC)):
+            return []
+        label = window.get("label")
+        if label is not None and not isinstance(label, str):
+            raise ValueError("invalid official_signal window label")
+        probabilities = payload.get("probabilities")
+        if probabilities is None:
+            probabilities = {}
+        if not isinstance(probabilities, dict):
+            raise ValueError("invalid forecast probabilities")
+        probability = probabilities.get("signal_percent")
+        if probability is None:
+            score = signal.get("score")
+            probability = score.get("value") if isinstance(score, dict) else score
+        if probability is None and probabilities.get("commitment") is not None:
+            commitment = _probability(probabilities["commitment"], "commitment", maximum=1)
+            probability = round(commitment * 100, 6)
         return [
             ResetEvent(
                 id=signal["tweet_id"],
-                announced_at=parse_timestamp(signal["at"]),
+                announced_at=announced_at,
                 summary=signal["summary"],
                 url=http_url(signal["url"]),
                 provider="codex_reset",
                 source_url="https://codex-reset.com/",
-                kind="committed",
+                kind="forecast",
+                probability=_probability(probability, "signal probability"),
+                probability_24h=_probability(probabilities.get("rounded_24h"), "rounded_24h"),
+                probability_48h=_probability(probabilities.get("rounded_48h"), "rounded_48h"),
+                window_label=label,
+                expected_at=target or end,
             )
         ]
+
+
+def _optional_timestamp(value: object, field: str) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"invalid timestamp field: {field}")
+    return parse_timestamp(value)
+
+
+def _probability(value: object, field: str, *, maximum: int = 100) -> int | float | None:
+    if value is None:
+        return None
+    if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= maximum:
+        raise ValueError(f"invalid probability field: {field}")
+    return value
 
 
 # Add a factory here to make another provider available in TOML.

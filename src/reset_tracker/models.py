@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -36,7 +36,12 @@ class ResetEvent:
     url: str
     provider: str
     source_url: str
-    kind: Literal["confirmed", "committed"] = "confirmed"
+    kind: Literal["confirmed", "committed", "forecast"] = "confirmed"
+    probability: int | float | None = None
+    probability_24h: int | float | None = None
+    probability_48h: int | float | None = None
+    window_label: str | None = None
+    expected_at: datetime | None = None
 
     @property
     def identity(self) -> str:
@@ -45,9 +50,11 @@ class ResetEvent:
         hostname = parts.netloc.lower()
         if hostname in {"twitter.com", "www.twitter.com", "www.x.com"}:
             hostname = "x.com"
-        return urlunsplit(("https", hostname, parts.path.rstrip("/"), "", ""))
+        identity = urlunsplit(("https", hostname, parts.path.rstrip("/"), "", ""))
+        # A forecast with probabilities is distinct from an earlier commitment-only alert.
+        return f"forecast:{identity}" if self.kind == "forecast" else identity
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "announced_at": timestamp_text(self.announced_at),
@@ -56,20 +63,33 @@ class ResetEvent:
             "provider": self.provider,
             "source_url": self.source_url,
             "kind": self.kind,
+            "probability": self.probability,
+            "probability_24h": self.probability_24h,
+            "probability_48h": self.probability_48h,
+            "window_label": self.window_label,
+            "expected_at": timestamp_text(self.expected_at) if self.expected_at else None,
         }
 
     @classmethod
-    def from_dict(cls, value: dict[str, str]) -> ResetEvent:
-        return cls(**{**value, "announced_at": parse_timestamp(value["announced_at"])})
+    def from_dict(cls, value: dict[str, Any]) -> ResetEvent:
+        fields = {**value, "announced_at": parse_timestamp(value["announced_at"])}
+        if fields.get("expected_at") is not None:
+            fields["expected_at"] = parse_timestamp(fields["expected_at"])
+        return cls(**fields)
 
 
 def sample_event() -> ResetEvent:
     return ResetEvent(
         id="sample-reset",
         announced_at=datetime(2026, 1, 1, 12, tzinfo=UTC),
-        summary="An upcoming global Codex reset has been committed.",
+        summary="An official signal forecasts an upcoming global Codex reset.",
         url="https://example.com/announcements/sample-reset",
         provider="codex_reset",
         source_url="https://codex-reset.com/",
-        kind="committed",
+        kind="forecast",
+        probability=93,
+        probability_24h=32,
+        probability_48h=53,
+        window_label="by 12 PM UTC on Jan 2",
+        expected_at=datetime(2026, 1, 2, 12, tzinfo=UTC),
     )

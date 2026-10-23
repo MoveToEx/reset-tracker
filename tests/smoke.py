@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -18,24 +19,36 @@ def smoke(directory: Path) -> None:
     if database.exists():
         raise RuntimeError("smoke directory must not already contain state.sqlite3")
     state = {"latest": 2, "fail": True, "posts": [], "gets": 0}
+    base_time = datetime.now(UTC) - timedelta(hours=1)
+    deadline = (base_time + timedelta(days=1)).isoformat(timespec="microseconds")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
             pass
 
         def do_GET(self):
-            assert self.path == "/api/feed"
+            assert self.path == "/api/forecast"
             state["gets"] += 1
             body = json.dumps(
                 {
-                    "signal": {
+                    "official_signal": {
                         "tweet_id": str(state["latest"]),
                         "kind": "signal",
-                        "active": True,
-                        "at": f"2026-01-01T12:00:0{state['latest']}Z",
-                        "summary": f"Committed reset {state['latest']}",
+                        "at": (base_time + timedelta(seconds=state["latest"])).isoformat(),
+                        "summary": f"Forecast reset {state['latest']}",
                         "url": f"https://example.com/resets/{state['latest']}",
-                    }
+                        "window": {
+                            "target_at": deadline,
+                            "end_at": deadline,
+                            "label": "within 24 hours",
+                        },
+                    },
+                    "last_reset_at": (base_time - timedelta(days=1)).isoformat(),
+                    "probabilities": {
+                        "signal_percent": 93,
+                        "rounded_24h": 32,
+                        "rounded_48h": 53,
+                    },
                 }
             ).encode()
             self.send_response(200)
@@ -46,7 +59,11 @@ def smoke(directory: Path) -> None:
 
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            assert payload["event"]["kind"] == "committed"
+            assert payload["event"]["kind"] == "forecast"
+            assert payload["event"]["probability"] == 93
+            assert payload["event"]["probability_24h"] == 32
+            assert payload["event"]["probability_48h"] == 53
+            assert payload["event"]["expected_at"] is not None
             state["posts"].append(payload["event"]["id"])
             self.send_response(503 if state["fail"] else 200)
             self.send_header("Content-Length", "0")
@@ -67,7 +84,7 @@ def smoke(directory: Path) -> None:
     # Only the mock endpoint is substituted. All CLI, HTTP, parsing and persistence code is real.
     bootstrap = (
         "from reset_tracker.providers import CodexResetProvider; "
-        f"CodexResetProvider.endpoint = {base_url + '/api/feed'!r}; "
+        f"CodexResetProvider.endpoint = {base_url + '/api/forecast'!r}; "
         "from reset_tracker.cli import main; raise SystemExit(main())"
     )
     environment = {

@@ -48,6 +48,39 @@ _BUILTIN_TEMPLATES = {
           "name": "Data",
           "value": {{ event.source_url | limit_utf16(250) | tojson }}
         }
+        {% if event.probability is not none %},
+        {
+          "name": "Signal probability",
+          "value": {{ ("%g%%" | format(event.probability)) | tojson }},
+          "inline": true
+        }
+        {% endif %}
+        {% if event.probability_24h is not none %},
+        {
+          "name": "24h cadence probability",
+          "value": {{ ("%g%%" | format(event.probability_24h)) | tojson }},
+          "inline": true
+        }
+        {% endif %}
+        {% if event.probability_48h is not none %},
+        {
+          "name": "48h cadence probability",
+          "value": {{ ("%g%%" | format(event.probability_48h)) | tojson }},
+          "inline": true
+        }
+        {% endif %}
+        {% if event.window_label %},
+        {
+          "name": "Forecast window",
+          "value": {{ event.window_label | limit_utf16(500) | tojson }}
+        }
+        {% endif %}
+        {% if event.expected_at is not none %},
+        {
+          "name": "Expected by (UTC)",
+          "value": {{ event.expected_at | tojson }}
+        }
+        {% endif %}
       ]
     }
   ],

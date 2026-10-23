@@ -237,13 +237,18 @@ def test_discord_is_bounded_credited_and_preserves_query_parameters(summary):
     request = render_request(webhook, event, "now")
     payload = json.loads(request.body)
     embed = payload["embeds"][0]
-    assert embed["title"] == "Codex reset committed"
+    assert embed["title"] == "Codex reset forecast"
     assert len(embed["description"].encode("utf-16-le")) // 2 <= 4096
     assert embed["url"] == event.url
     assert embed["timestamp"] == event.to_dict()["announced_at"]
     fields = {field["name"]: field["value"] for field in embed["fields"]}
     assert fields["Announcement"] == event.url
     assert fields["Data"] == event.source_url
+    assert fields["Signal probability"] == "93%"
+    assert fields["24h cadence probability"] == "32%"
+    assert fields["48h cadence probability"] == "53%"
+    assert fields["Forecast window"] == event.window_label
+    assert fields["Expected by (UTC)"] == event.to_dict()["expected_at"]
     assert all(len(value.encode("utf-16-le")) // 2 <= 1024 for value in fields.values())
     embed_text = (
         embed["title"]
@@ -270,12 +275,40 @@ def test_discord_override_keeps_rich_payload_and_disables_mentions_by_default():
     }
 
 
+@pytest.mark.parametrize(("probability", "display"), [(None, None), (0, "0%"), (93.5, "93.5%")])
+def test_discord_handles_optional_and_zero_probability(probability, display):
+    event = replace(
+        sample_event(),
+        probability=probability,
+        probability_24h=None,
+        probability_48h=None,
+        expected_at=None,
+        window_label=None,
+    )
+    request = render_request(
+        WebhookConfig("discord", "https://discord.com/api/webhooks/id/token", preset="discord"),
+        event,
+        "now",
+    )
+    fields = {
+        field["name"]: field["value"] for field in json.loads(request.body)["embeds"][0]["fields"]
+    }
+    if display is None:
+        assert "Signal probability" not in fields
+    else:
+        assert fields["Signal probability"] == display
+    assert "24h cadence probability" not in fields
+    assert "48h cadence probability" not in fields
+
+
 def test_preview_prints_rich_json_object(config_path, capsys):
     config_path.write_text(BASE + 'preset = "discord"\n', encoding="utf-8")
     assert main(["--config", str(config_path), "preview", "--webhook", "first"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert isinstance(payload, dict)
-    assert payload["embeds"][0]["title"] == "Codex reset committed"
+    assert payload["embeds"][0]["title"] == "Codex reset forecast"
+    fields = {field["name"]: field["value"] for field in payload["embeds"][0]["fields"]}
+    assert fields["Signal probability"] == "93%"
 
 
 @pytest.mark.parametrize(

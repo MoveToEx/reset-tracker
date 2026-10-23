@@ -90,17 +90,36 @@ def test_duplicate_snapshot_events_are_coalesced(tmp_path, make_event):
         assert store.record_snapshot([make_event(1)] * 3, ["first"], 1000) == 1
 
 
-def test_legacy_pending_payloads_remain_confirmed(tmp_path, make_event):
+@pytest.mark.parametrize("kind", ["confirmed", "committed"])
+def test_legacy_pending_payloads_remain_usable_without_probabilities(tmp_path, make_event, kind):
     with Store(tmp_path / "state.sqlite3") as store:
-        event = make_event(1, kind="confirmed")
+        event = make_event(
+            1,
+            kind=kind,
+            probability=None,
+            probability_24h=None,
+            probability_48h=None,
+            window_label=None,
+            expected_at=None,
+        )
         store.record_snapshot([event], ["first"], 1000)
         legacy_payload = event.to_dict()
-        del legacy_payload["kind"]
+        if kind == "confirmed":
+            del legacy_payload["kind"]
+        for field in (
+            "probability",
+            "probability_24h",
+            "probability_48h",
+            "window_label",
+            "expected_at",
+        ):
+            del legacy_payload[field]
         with store.connection:
             store.connection.execute(
                 "UPDATE events SET payload = ? WHERE identity = ?",
                 (json.dumps(legacy_payload), event.identity),
             )
         restored = store.heads(["first"])[0].event
-        assert restored.kind == "confirmed"
+        assert restored.kind == kind
+        assert restored.probability is None
         assert restored == event

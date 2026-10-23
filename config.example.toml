@@ -17,7 +17,13 @@ preset = "discord"
 #     "description": {{ event.summary | limit_utf16(4096) | tojson }},
 #     "url": {{ event.url | tojson }},
 #     "timestamp": {{ event.announced_at | tojson }},
-#     "fields": [{"name": "Data", "value": {{ event.source_url | tojson }}}]
+#     "fields": [
+#       {
+#         "name": "Signal probability",
+#         "value": {{ (("%g%%" | format(event.probability)) if event.probability is not none else "Unknown") | tojson }}
+#       },
+#       {"name": "Data", "value": {{ event.source_url | tojson }}}
+#     ]
 #   }],
 #   "allowed_mentions": {"parse": []}
 # }
@@ -35,6 +41,10 @@ preset = "discord"
 #   "message": {{ event.summary | tojson }},
 #   "announcement": {{ event.url | tojson }},
 #   "source": {{ event.source_url | tojson }},
+#   "probability": {{ event.probability | tojson }},
+#   "probability_24h": {{ event.probability_24h | tojson }},
+#   "probability_48h": {{ event.probability_48h | tojson }},
+#   "expected_at": {{ event.expected_at | tojson }},
 #   "detected_at": {{ detected_at | tojson }}
 # }
 # '''
