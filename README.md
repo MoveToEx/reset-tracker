@@ -62,7 +62,7 @@ container. The application does not load dotenv files itself.
 
 | Preset | Body |
 | --- | --- |
-| `discord` | A message with the summary, UTC announcement time, announcement link, and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
+| `discord` | A rich embed with the summary, UTC announcement time, announcement link, and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
 | `generic_json` | `{"event": {...}, "detected_at": "..."}` containing the normalized event. |
 
 Each event exposes `id`, `announced_at`, `summary`, `url`, `provider`, and `source_url`.
@@ -92,15 +92,45 @@ Authorization = "Bearer ${CUSTOM_WEBHOOK_TOKEN}"
 ```
 
 Use `tojson` for JSON string values, without surrounding quotation marks.
-The rendered JSON is parsed and serialized before sending, preserving JSON types
-and rejecting malformed values. Templates receive only `event` and `detected_at`,
-with standard Jinja filters and strict undefined-variable handling.
+Every JSON template renders the complete request body as a **JSON object**.
+Nested objects and arrays retain their types, allowing rich payloads such as
+Discord embeds, fields, and components. The renderer parses and validates the
+result before sending; a top-level array or scalar is rejected.
+Templates receive only `event` and `detected_at`, with standard Jinja filters
+and strict undefined-variable handling. The `limit_utf16(n)` filter bounds text
+to `n` UTF-16 units, including emoji, for Discord character limits.
 Startup validation renders a sample payload; failures specific to real data pause
 the endpoint at delivery time.
 
 Use `template_file = "templates/webhook.j2"` instead of `body_template` to load a
 UTF-8 template file. When using Docker, mount that directory read-only under
-`/config/templates`. Choose exactly one template source.
+`/config/templates`. Choose exactly one template source. Both `body_template`
+and `template_file` can override a built-in preset; `preset = "custom"` requires one.
+
+For example, override the complete Discord payload to customize its rich content:
+
+```toml
+[[webhooks]]
+id = "discord"
+url = "${DISCORD_WEBHOOK_URL}"
+preset = "discord"
+body_template = '''
+{
+  "embeds": [{
+    "title": "Codex reset confirmed",
+    "description": {{ event.summary | limit_utf16(4096) | tojson }},
+    "url": {{ event.url | tojson }},
+    "timestamp": {{ event.announced_at | tojson }},
+    "color": 5793266,
+    "fields": [{"name": "Data", "value": {{ event.source_url | tojson }}}]
+  }],
+  "allowed_mentions": {"parse": []}
+}
+'''
+```
+
+The Discord preset preserves `wait=true` with a body override and adds disabled
+mentions when `allowed_mentions` is omitted. Explicit payload fields are preserved.
 
 For a plain text request, set `preset = "custom"` and `body_format = "text"`.
 The default method is POST; custom requests can specify another method.

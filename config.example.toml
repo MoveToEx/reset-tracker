@@ -9,6 +9,20 @@ id = "discord"
 url = "${DISCORD_WEBHOOK_URL}"
 preset = "discord"
 
+# Optional: override the complete Discord JSON body, including rich embeds.
+# body_template = '''
+# {
+#   "embeds": [{
+#     "title": "Codex reset confirmed",
+#     "description": {{ event.summary | limit_utf16(4096) | tojson }},
+#     "url": {{ event.url | tojson }},
+#     "timestamp": {{ event.announced_at | tojson }},
+#     "fields": [{"name": "Data", "value": {{ event.source_url | tojson }}}]
+#   }],
+#   "allowed_mentions": {"parse": []}
+# }
+# '''
+
 # Add additional independent endpoints as needed.
 # [[webhooks]]
 # id = "custom"

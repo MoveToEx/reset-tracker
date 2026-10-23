@@ -29,37 +29,64 @@ class RenderedRequest:
 _environment = SandboxedEnvironment(undefined=StrictUndefined, autoescape=False)
 _environment.globals.clear()
 
+_BUILTIN_TEMPLATES = {
+    "discord": """
+{
+  "embeds": [
+    {
+      "title": "Codex reset confirmed",
+      "url": {{ event.url | tojson }},
+      "description": {{ event.summary | limit_utf16(4096) | tojson }},
+      "timestamp": {{ event.announced_at | tojson }},
+      "color": 5793266,
+      "fields": [
+        {
+          "name": "Announcement",
+          "value": {{ event.url | limit_utf16(500) | tojson }}
+        },
+        {
+          "name": "Data",
+          "value": {{ event.source_url | limit_utf16(250) | tojson }}
+        }
+      ]
+    }
+  ],
+  "allowed_mentions": {"parse": []}
+}
+""",
+    "generic_json": """
+{"event": {{ event | tojson }}, "detected_at": {{ detected_at | tojson }}}
+""",
+}
+
 
 def _limit(value: str, units: int) -> str:
     # Count UTF-16 units, including two units for astral Unicode characters.
     return value.encode("utf-16-le")[: units * 2].decode("utf-16-le", errors="ignore")
 
 
+_environment.filters["limit_utf16"] = _limit
+
+
 def render_request(webhook: WebhookConfig, event: ResetEvent, detected_at: str) -> RenderedRequest:
     headers = httpx.Headers(webhook.headers or {})
     url = webhook.url
     try:
+        template = webhook.body_template
+        if template is None:
+            template = _BUILTIN_TEMPLATES.get(webhook.preset, "")
+        rendered = _environment.from_string(template).render(
+            event=event.to_dict(), detected_at=detected_at
+        )
+        if webhook.body_format == "text":
+            headers.setdefault("Content-Type", "text/plain; charset=utf-8")
+            return RenderedRequest(webhook.method, url, dict(headers), rendered.encode("utf-8"))
+        payload = json.loads(rendered)
+        if not isinstance(payload, dict):
+            raise ValueError("webhook body must render to a JSON object")
         if webhook.preset == "discord":
             url = str(httpx.URL(url).copy_set_param("wait", "true"))
-            # Bound links as well as the summary to stay below Discord's content limit.
-            message = (
-                "Codex reset confirmed\n"
-                f"{event.announced_at.isoformat()}\n\n"
-                f"{_limit(event.summary, 1000)}\n\n"
-                f"Announcement: <{_limit(event.url, 500)}>\n"
-                f"Data: <{_limit(event.source_url, 250)}>"
-            )
-            payload = {"content": _limit(message, 2000), "allowed_mentions": {"parse": []}}
-        elif webhook.preset == "generic_json":
-            payload = {"event": event.to_dict(), "detected_at": detected_at}
-        else:
-            rendered = _environment.from_string(webhook.body_template or "").render(
-                event=event.to_dict(), detected_at=detected_at
-            )
-            if webhook.body_format == "text":
-                headers.setdefault("Content-Type", "text/plain; charset=utf-8")
-                return RenderedRequest(webhook.method, url, dict(headers), rendered.encode("utf-8"))
-            payload = json.loads(rendered)
+            payload.setdefault("allowed_mentions", {"parse": []})
         headers.setdefault("Content-Type", "application/json")
         body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
         return RenderedRequest(webhook.method, url, dict(headers), body)

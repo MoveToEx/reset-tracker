@@ -11,7 +11,7 @@ from .providers import PROVIDERS
 
 PRESETS = {
     "generic_json": "Normalized event and detection timestamp as JSON",
-    "discord": "Discord message with source attribution and mentions disabled",
+    "discord": "Discord rich embed with source attribution and mentions disabled",
 }
 
 
@@ -168,18 +168,15 @@ def load_config(path: str | Path) -> Settings:
                 raise ConfigError("body_format must be json or text; presets require json")
             template = entry.get("body_template")
             template_file = entry.get("template_file")
-            if preset == "custom":
-                if (template is None) == (template_file is None):
-                    raise ConfigError(
-                        "custom webhook requires exactly one body_template/template_file"
-                    )
-                if template_file is not None:
-                    template_path = Path(_expand(_string(template_file, "template_file")))
-                    template = (path.parent / template_path).read_text(encoding="utf-8")
-                else:
-                    template = _string(template, "body_template")
-            elif template is not None or template_file is not None:
-                raise ConfigError("body templates require preset = custom")
+            if template is not None and template_file is not None:
+                raise ConfigError("choose exactly one body_template/template_file")
+            if template_file is not None:
+                template_path = Path(_expand(_string(template_file, "template_file")))
+                template = (path.parent / template_path).read_text(encoding="utf-8")
+            elif template is not None:
+                template = _string(template, "body_template")
+            elif preset == "custom":
+                raise ConfigError("custom webhook requires a body_template/template_file")
             webhook = WebhookConfig(
                 id=webhook_id,
                 url=url,

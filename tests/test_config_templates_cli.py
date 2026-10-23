@@ -68,7 +68,6 @@ def test_invalid_root_settings(config_path, change):
         'preset = "unknown"\n',
         'body_format = "xml"\n',
         'body_format = "text"\n',
-        'body_template = "{}"\n',
         'preset = "custom"\n',
         'preset = "custom"\nbody_template = "{{ missing }}"\n',
         'preset = "custom"\nbody_template = "{% malformed"\n',
@@ -123,6 +122,59 @@ Authorization = "Bearer ${TOKEN}"
     assert "tojson" in webhook.body_template
 
 
+@pytest.mark.parametrize("preset", ["discord", "generic_json"])
+@pytest.mark.parametrize("source", ["inline", "file"])
+def test_preset_templates_render_complete_json_objects(config_path, preset, source):
+    template = """
+{
+  "embeds": [{
+    "title": "A rich notification",
+    "description": {{ event.summary | tojson }},
+    "fields": [{"name": "Detected", "value": {{ detected_at | tojson }}}]
+  }],
+  "allowed_mentions": {"parse": []}
+}
+"""
+    if source == "file":
+        (config_path.parent / "rich.j2").write_text(template, encoding="utf-8")
+        template_config = 'template_file = "rich.j2"\n'
+    else:
+        template_config = "body_template = '''" + template + "'''\n"
+    config_path.write_text(BASE + f'preset = "{preset}"\n' + template_config, encoding="utf-8")
+    webhook = load_config(config_path).webhooks[0]
+    event = replace(sample_event(), summary='Rich "quotes"\nUnicode 你好')
+    request = render_request(webhook, event, "now")
+    assert json.loads(request.body) == {
+        "embeds": [
+            {
+                "title": "A rich notification",
+                "description": event.summary,
+                "fields": [{"name": "Detected", "value": "now"}],
+            }
+        ],
+        "allowed_mentions": {"parse": []},
+    }
+    assert httpx.Headers(request.headers)["Content-Type"] == "application/json"
+    if preset == "discord":
+        assert httpx.URL(request.url).params["wait"] == "true"
+
+
+@pytest.mark.parametrize("template", ["[]", "[{}]", "null", "true", "42", '"plain text"'])
+def test_json_templates_must_render_objects(config_path, template):
+    webhook = WebhookConfig(
+        "custom", "https://example.com", preset="custom", body_template=template
+    )
+    with pytest.raises(RenderError) as error:
+        render_request(webhook, sample_event(), "now")
+    assert "must render to a JSON object" in str(error.value.__cause__)
+    config_path.write_text(
+        BASE + 'preset = "custom"\n' + "body_template = '''" + template + "'''\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="invalid template"):
+        load_config(config_path)
+
+
 def test_json_template_escapes_strings_and_retains_types():
     event = replace(sample_event(), summary='Quotes " newline\n Unicode 你好')
     webhook = WebhookConfig(
@@ -142,6 +194,7 @@ def test_json_template_escapes_strings_and_retains_types():
         "{{ missing }}",
         '{"text": "{{ event.summary }}"}',
         "NaN",
+        '{"value": NaN}',
         "{{ event.__class__.__mro__ }}",
     ],
 )
@@ -183,14 +236,46 @@ def test_discord_is_bounded_credited_and_preserves_query_parameters(summary):
     event = replace(sample_event(), summary=summary)
     request = render_request(webhook, event, "now")
     payload = json.loads(request.body)
-    assert len(payload["content"]) <= 2000
-    assert len(payload["content"].encode("utf-16-le")) // 2 <= 2000
-    assert event.url in payload["content"]
-    assert event.source_url in payload["content"]
-    assert event.announced_at.isoformat() in payload["content"]
+    embed = payload["embeds"][0]
+    assert embed["title"] == "Codex reset confirmed"
+    assert len(embed["description"].encode("utf-16-le")) // 2 <= 4096
+    assert embed["url"] == event.url
+    assert embed["timestamp"] == event.to_dict()["announced_at"]
+    fields = {field["name"]: field["value"] for field in embed["fields"]}
+    assert fields["Announcement"] == event.url
+    assert fields["Data"] == event.source_url
+    assert all(len(value.encode("utf-16-le")) // 2 <= 1024 for value in fields.values())
+    embed_text = (
+        embed["title"]
+        + embed["description"]
+        + "".join(field["name"] + field["value"] for field in embed["fields"])
+    )
+    assert len(embed_text.encode("utf-16-le")) // 2 <= 6000
     assert payload["allowed_mentions"] == {"parse": []}
     assert httpx.URL(request.url).params["wait"] == "true"
     assert httpx.URL(request.url).params["thread_id"] == "123"
+
+
+def test_discord_override_keeps_rich_payload_and_disables_mentions_by_default():
+    webhook = WebhookConfig(
+        "discord",
+        "https://discord.com/api/webhooks/id/token",
+        preset="discord",
+        body_template='{"embeds": [{"description": {{ event.summary | tojson }}}]}',
+    )
+    request = render_request(webhook, sample_event(), "now")
+    assert json.loads(request.body) == {
+        "embeds": [{"description": sample_event().summary}],
+        "allowed_mentions": {"parse": []},
+    }
+
+
+def test_preview_prints_rich_json_object(config_path, capsys):
+    config_path.write_text(BASE + 'preset = "discord"\n', encoding="utf-8")
+    assert main(["--config", str(config_path), "preview", "--webhook", "first"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert isinstance(payload, dict)
+    assert payload["embeds"][0]["title"] == "Codex reset confirmed"
 
 
 @pytest.mark.parametrize(

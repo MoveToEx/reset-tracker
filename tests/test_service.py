@@ -24,6 +24,56 @@ def test_ordered_fallback_stops_on_valid_empty(make_settings):
     assert calls == ["broken", "empty"]
 
 
+def test_rich_json_template_is_delivered_as_an_object(make_settings, make_event):
+    settings = make_settings(
+        webhooks=(
+            WebhookConfig(
+                "first",
+                "https://discord.com/api/webhooks/id/token",
+                preset="discord",
+                body_template="""
+{
+  "embeds": [{
+    "description": {{ event.summary | tojson }},
+    "color": 5793266,
+    "fields": [{"name": "Provider", "value": {{ event.provider | tojson }}, "inline": true}]
+  }],
+  "tts": false
+}
+""",
+            ),
+        )
+    )
+    event = make_event(1, summary='Rich "quotes"\nUnicode 你好')
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200)
+
+    with (
+        Store(settings.database_path) as store,
+        httpx.Client(transport=httpx.MockTransport(handle)) as client,
+    ):
+        store.record_snapshot([event], ["first"], 1000)
+        assert Tracker(settings, store, client, clock=Clock()).dispatch_due() == (1, 0)
+        assert store.pending_count(["first"]) == 0
+    assert len(requests) == 1
+    assert requests[0].headers["Content-Type"] == "application/json"
+    assert requests[0].url.params["wait"] == "true"
+    assert json.loads(requests[0].content) == {
+        "embeds": [
+            {
+                "description": event.summary,
+                "color": 5793266,
+                "fields": [{"name": "Provider", "value": event.provider, "inline": True}],
+            }
+        ],
+        "tts": False,
+        "allowed_mentions": {"parse": []},
+    }
+
+
 @pytest.mark.parametrize(
     "error",
     [
