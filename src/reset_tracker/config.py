@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .diagnostics import remember_secret, remember_webhook
 from .models import http_url, sample_event
 from .providers import PROVIDERS
 
@@ -44,7 +45,9 @@ def _expand(value: str) -> str:
         name = match.group(1)
         if name not in os.environ:
             raise ConfigError(f"missing environment variable: {name}")
-        return os.environ[name]
+        value = os.environ[name]
+        remember_secret(value)
+        return value
 
     return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", replace, value)
 
@@ -186,6 +189,7 @@ def load_config(path: str | Path) -> Settings:
                 body_format=body_format,
                 body_template=template,
             )
+            remember_webhook(webhook.url, webhook.headers)
             try:
                 render_request(webhook, sample_event(), "2026-01-01T12:00:00.000000Z")
             except RenderError as exc:

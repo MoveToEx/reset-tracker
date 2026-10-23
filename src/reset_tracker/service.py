@@ -7,6 +7,7 @@ from collections.abc import Callable
 import httpx
 
 from .config import Settings
+from .diagnostics import log_exception, remember_webhook
 from .http import retry_delay
 from .providers import PROVIDERS, Provider, ProviderError
 from .storage import Store
@@ -35,6 +36,8 @@ class Tracker:
         )
         self.clock = clock
         self.webhooks = {webhook.id: webhook for webhook in settings.webhooks}
+        for webhook in settings.webhooks:
+            remember_webhook(webhook.url, webhook.headers)
 
     def poll(self) -> bool:
         for provider in self.providers:
@@ -48,11 +51,19 @@ class Tracker:
                 delay = retry_delay(exc.response, self.clock())
                 if status == 429 or delay is not None:
                     self.store.cool_provider(provider.name, self.clock() + max(60, delay or 0))
-                logger.warning("provider=%s outcome=http_error status=%s", provider.name, status)
+                log_exception(
+                    logging.WARNING,
+                    "provider=%s outcome=http_error status=%s",
+                    provider.name,
+                    status,
+                )
                 continue
             except (httpx.HTTPError, ProviderError) as exc:
-                logger.warning(
-                    "provider=%s outcome=failed error=%s", provider.name, type(exc).__name__
+                log_exception(
+                    logging.WARNING,
+                    "provider=%s outcome=failed error=%s",
+                    provider.name,
+                    type(exc).__name__,
                 )
                 continue
             queued = self.store.record_snapshot(events, list(self.webhooks), self.clock())
@@ -95,8 +106,22 @@ class Tracker:
                 transient = response.status_code in (408, 429) or response.status_code >= 500
             except RenderError:
                 reason = "render_error"
+                log_exception(
+                    logging.WARNING,
+                    "endpoint=%s delivery=%s exception=%s",
+                    webhook.id,
+                    delivery.id,
+                    reason,
+                )
             except (httpx.HTTPError, httpx.InvalidURL) as exc:
                 reason = type(exc).__name__
+                log_exception(
+                    logging.WARNING,
+                    "endpoint=%s delivery=%s exception=%s",
+                    webhook.id,
+                    delivery.id,
+                    reason,
+                )
                 transient = not isinstance(exc, (httpx.InvalidURL, httpx.UnsupportedProtocol))
             failed += 1
             backoff = min(3600, 30 * 2 ** min(delivery.attempts, 7))

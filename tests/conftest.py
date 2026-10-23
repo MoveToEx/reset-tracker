@@ -4,7 +4,15 @@ from datetime import timedelta
 import pytest
 
 from reset_tracker.config import Settings, WebhookConfig
+from reset_tracker.diagnostics import reset_redaction
 from reset_tracker.models import sample_event
+
+
+@pytest.fixture(autouse=True)
+def isolated_redaction():
+    reset_redaction()
+    yield
+    reset_redaction()
 
 
 @pytest.fixture

@@ -11,6 +11,7 @@ from collections.abc import Sequence
 import httpx
 
 from .config import PRESETS, ConfigError, load_config
+from .diagnostics import log_exception, reset_redaction
 from .models import sample_event
 from .service import Tracker
 from .storage import Store
@@ -22,6 +23,7 @@ class UTCFormatter(logging.Formatter):
 
 
 def _logging() -> None:
+    reset_redaction()
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(
         UTCFormatter("%(asctime)sZ %(levelname)s %(message)s", "%Y-%m-%dT%H:%M:%S")
@@ -48,11 +50,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     _logging()
     logger = logging.getLogger("reset_tracker")
-    if args.command == "presets":
-        for name, description in PRESETS.items():
-            print(f"{name}: {description}")
-        return 0
     try:
+        if args.command == "presets":
+            for name, description in PRESETS.items():
+                print(f"{name}: {description}")
+            return 0
         settings = load_config(args.config)
         if args.command == "validate":
             print("Configuration and sample payloads are valid.")
@@ -97,13 +99,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 logger.info("service outcome=stopped")
                 return 0
     except ConfigError as exc:
-        logger.error("configuration error: %s", exc)
+        log_exception(logging.ERROR, "configuration error: %s", exc)
         return 2
     except (OSError, sqlite3.Error):
-        logger.error("service outcome=failed reason=storage_or_filesystem_error")
+        log_exception(logging.ERROR, "service outcome=failed reason=storage_or_filesystem_error")
         return 1
     except httpx.HTTPError as exc:
-        logger.error("service outcome=failed reason=%s", type(exc).__name__)
+        log_exception(logging.ERROR, "service outcome=failed reason=%s", type(exc).__name__)
+        return 1
+    except Exception:
+        log_exception(logging.ERROR, "service outcome=failed reason=unexpected_error")
         return 1
 
 

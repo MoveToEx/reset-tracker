@@ -168,6 +168,11 @@ Data availability is limited to events returned by upstream providers.
 
 Logs go to stdout in UTC and identify providers/endpoints without printing
 webhook URLs, credentials, response bodies, or authorization headers.
+Exceptions include their messages, chained causes, and full tracebacks by default,
+including provider, network, rendering, configuration, storage, and unexpected
+application failures. HTTP(S) URLs and configured credentials are redacted before
+the log record is emitted; traceback locals are not captured. Polling fallback,
+delivery retry, and endpoint pause behavior remain the same.
 Payload preview prints the rendered body, so template authors should keep secrets
 in headers rather than message bodies.
 
