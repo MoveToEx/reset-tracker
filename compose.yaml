@@ -1,0 +1,13 @@
+services:
+  reset-tracker:
+    build: .
+    image: reset-tracker:local
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    volumes:
+      - ./config.toml:/config/config.toml:ro
+      - reset-tracker-data:/data
+
+volumes:
+  reset-tracker-data:

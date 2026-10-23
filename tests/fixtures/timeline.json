@@ -1,0 +1,33 @@
+{
+  "updated_at": "2026-01-02T13:00:00Z",
+  "events": [
+    {
+      "id": "upcoming",
+      "group": "reset",
+      "announcement_state": "none",
+      "announced_at": "2026-01-02T12:30:00Z",
+      "summary": "A reset is expected later.",
+      "url": "https://x.com/example/status/upcoming"
+    },
+    {
+      "id": "confirmed",
+      "group": "reset",
+      "announcement_state": "announced",
+      "announced_at": "2026-01-02T12:00:00Z",
+      "summary": "A global reset has been confirmed.",
+      "url": "https://x.com/example/status/confirmed",
+      "extra_field": "ignored"
+    },
+    {
+      "id": "banked",
+      "group": "credits",
+      "announcement_state": "announced",
+      "summary": "A banked reset is available."
+    },
+    {
+      "id": "boost",
+      "group": "boost",
+      "announcement_state": "announced"
+    }
+  ]
+}

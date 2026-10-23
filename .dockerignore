@@ -1,0 +1,12 @@
+.git
+.venv
+.uv-cache
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+.env
+config.toml
+data
+tests
+*.sqlite3*

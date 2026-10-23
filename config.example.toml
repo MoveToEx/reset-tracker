@@ -1,0 +1,28 @@
+interval_seconds = 600
+request_timeout_seconds = 20
+database_path = "/data/reset-tracker.sqlite3"
+user_agent = "reset-tracker/0.1.0 (+mailto:${CONTACT_EMAIL})"
+providers = ["codex_reset"]
+
+[[webhooks]]
+id = "discord"
+url = "${DISCORD_WEBHOOK_URL}"
+preset = "discord"
+
+# Add additional independent endpoints as needed.
+# [[webhooks]]
+# id = "custom"
+# url = "${CUSTOM_WEBHOOK_URL}"
+# preset = "custom"
+# method = "POST"
+# body_format = "json"
+# body_template = '''
+# {
+#   "message": {{ event.summary | tojson }},
+#   "announcement": {{ event.url | tojson }},
+#   "source": {{ event.source_url | tojson }},
+#   "detected_at": {{ detected_at | tojson }}
+# }
+# '''
+# [webhooks.headers]
+# Authorization = "Bearer ${CUSTOM_WEBHOOK_TOKEN}"
