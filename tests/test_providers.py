@@ -36,7 +36,6 @@ def test_fetch_identifies_reader():
         {},
         {"events": None},
         {"events": [None]},
-        {"events": [{"group": "reset"}]},
         {"events": [{"group": "reset", "announcement_state": "announced"}]},
     ],
 )
@@ -48,6 +47,40 @@ def test_malformed_payload_is_provider_failure(payload):
         pytest.raises(ProviderError),
     ):
         CodexResetProvider().fetch(client)
+
+
+@pytest.mark.parametrize(
+    "state_fields",
+    [
+        {},
+        {"announcement_state": None},
+        {"announcement_state": ""},
+        {"announcement_state": "pending"},
+        {"announcement_state": 42},
+    ],
+)
+def test_unclassified_entries_do_not_abort_fetch(state_fields):
+    confirmed = TIMELINE["events"][1]
+    unclassified = (
+        {key: value for key, value in confirmed.items() if key != "announcement_state"}
+        | {"id": "unclassified"}
+        | state_fields
+    )
+    payload = {"events": [unclassified, confirmed]}
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as client:
+        events = CodexResetProvider().fetch(client)
+    assert [event.id for event in events] == ["confirmed"]
+
+
+def test_missing_announcement_state_is_valid_without_qualifying_resets():
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"events": [{"group": "reset"}]})
+        )
+    ) as client:
+        assert CodexResetProvider().fetch(client) == []
 
 
 def test_invalid_json_is_provider_failure():

@@ -38,9 +38,8 @@ class CodexResetProvider:
                 raise ValueError("invalid timeline event")
             if item["group"] != "reset":
                 continue
-            if not isinstance(item.get("announcement_state"), str):
-                raise ValueError("missing announcement state")
-            if item["announcement_state"] != "announced":
+            # Older or unclassified entries may omit confirmation metadata.
+            if item.get("announcement_state") != "announced":
                 continue
             for field in ("id", "announced_at", "summary", "url"):
                 if not isinstance(item.get(field), str) or not item[field]:

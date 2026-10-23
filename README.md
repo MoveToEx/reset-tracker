@@ -119,6 +119,8 @@ The built-in `codex_reset` provider reads
 It accepts only `group = "reset"` and `announcement_state = "announced"`,
 following the [tracker's documented reset rule](https://codex-reset.com/developers).
 Predictions, advance signals, banked grants, and boosts do not notify.
+Entries with missing, null, or unrecognized announcement states are skipped without
+failing the fetch; they are not assumed to be confirmed resets.
 Provider HTTP 429 responses create a persisted cooldown of at least 60 seconds,
 respecting longer Retry-After values.
 
