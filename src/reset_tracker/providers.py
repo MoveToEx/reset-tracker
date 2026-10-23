@@ -18,7 +18,8 @@ class Provider(Protocol):
 
 class CodexResetProvider:
     name = "codex_reset"
-    endpoint = "https://codex-reset.com/api/timeline"
+    endpoint = "https://codex-reset.com/api/feed"
+    cache_namespace = "committed"
 
     def fetch(self, client: httpx.Client) -> list[ResetEvent]:
         response = client.get(self.endpoint)
@@ -26,35 +27,33 @@ class CodexResetProvider:
         try:
             return self.parse(response.json())
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
-            raise ProviderError("invalid timeline response") from exc
+            raise ProviderError("invalid feed response") from exc
 
     @staticmethod
     def parse(payload: object) -> list[ResetEvent]:
-        if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
-            raise ValueError("expected an events array")
-        events = []
-        for item in payload["events"]:
-            if not isinstance(item, dict) or not isinstance(item.get("group"), str):
-                raise ValueError("invalid timeline event")
-            if item["group"] != "reset":
-                continue
-            # Older or unclassified entries may omit confirmation metadata.
-            if item.get("announcement_state") != "announced":
-                continue
-            for field in ("id", "announced_at", "summary", "url"):
-                if not isinstance(item.get(field), str) or not item[field]:
-                    raise ValueError("invalid reset field")
-            events.append(
-                ResetEvent(
-                    id=item["id"],
-                    announced_at=parse_timestamp(item["announced_at"]),
-                    summary=item["summary"],
-                    url=http_url(item["url"]),
-                    provider="codex_reset",
-                    source_url="https://codex-reset.com/",
-                )
+        if not isinstance(payload, dict):
+            raise ValueError("expected a feed object")
+        signal = payload.get("signal")
+        if signal is None:
+            return []
+        if not isinstance(signal, dict):
+            raise ValueError("expected a signal object or null")
+        if signal.get("active") is not True or signal.get("kind") != "signal":
+            return []
+        for field in ("tweet_id", "at", "summary", "url"):
+            if not isinstance(signal.get(field), str) or not signal[field]:
+                raise ValueError(f"invalid signal field: {field}")
+        return [
+            ResetEvent(
+                id=signal["tweet_id"],
+                announced_at=parse_timestamp(signal["at"]),
+                summary=signal["summary"],
+                url=http_url(signal["url"]),
+                provider="codex_reset",
+                source_url="https://codex-reset.com/",
+                kind="committed",
             )
-        return events
+        ]
 
 
 # Add a factory here to make another provider available in TOML.

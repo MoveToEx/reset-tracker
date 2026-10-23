@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from dataclasses import replace
 
@@ -87,3 +88,19 @@ def test_added_and_removed_webhooks_do_not_replay_history(tmp_path, make_event):
 def test_duplicate_snapshot_events_are_coalesced(tmp_path, make_event):
     with Store(tmp_path / "state.sqlite3") as store:
         assert store.record_snapshot([make_event(1)] * 3, ["first"], 1000) == 1
+
+
+def test_legacy_pending_payloads_remain_confirmed(tmp_path, make_event):
+    with Store(tmp_path / "state.sqlite3") as store:
+        event = make_event(1, kind="confirmed")
+        store.record_snapshot([event], ["first"], 1000)
+        legacy_payload = event.to_dict()
+        del legacy_payload["kind"]
+        with store.connection:
+            store.connection.execute(
+                "UPDATE events SET payload = ? WHERE identity = ?",
+                (json.dumps(legacy_payload), event.identity),
+            )
+        restored = store.heads(["first"])[0].event
+        assert restored.kind == "confirmed"
+        assert restored == event

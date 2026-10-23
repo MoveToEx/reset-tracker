@@ -54,13 +54,13 @@ def test_provider_parsing_logs_the_original_cause(make_settings, error_logs):
     with (
         Store(settings.database_path) as store,
         httpx.Client(
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[]))
         ) as client,
     ):
         assert Tracker(settings, store, client, providers=[CodexResetProvider()]).poll() is False
     assert "provider=codex_reset" in error_logs.text
-    assert "ValueError: expected an events array" in error_logs.text
-    assert "ProviderError: invalid timeline response" in error_logs.text
+    assert "ValueError: expected a feed object" in error_logs.text
+    assert "ProviderError: invalid feed response" in error_logs.text
 
 
 def test_provider_http_errors_include_the_exception(make_settings, error_logs):

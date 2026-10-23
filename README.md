@@ -1,6 +1,6 @@
 # Reset tracker
 
-A Python 3.13+ service that watches confirmed global Codex resets and sends webhook
+A Python 3.13+ service that watches committed global Codex resets and sends webhook
 notifications. It runs in a foreground process, with Docker Compose as the primary
 deployment method.
 
@@ -25,8 +25,9 @@ deployment method.
    docker compose logs -f
    ```
 
-The first successful fetch sends the **latest confirmed reset**, including when that
-reset predates installation. Later fetches send each new reset in chronological order.
+The first successful fetch sends the **current active reset commitment**, including
+when its announcement predates installation. Later fetches notify about new active
+commitments. These announce an upcoming reset; they do not confirm it has taken place.
 The container runs as UID/GID 10001. Configuration is mounted read-only, and the named
 `reset-tracker-data` volume persists the SQLite database under `/data`.
 Stopping or recreating the container preserves that state. Use one service instance
@@ -62,12 +63,16 @@ container. The application does not load dotenv files itself.
 
 | Preset | Body |
 | --- | --- |
-| `discord` | A rich embed with the summary, UTC announcement time, announcement link, and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
+| `discord` | A rich embed labeled “Codex reset committed” with the summary, UTC announcement time, announcement link, and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
 | `generic_json` | `{"event": {...}, "detected_at": "..."}` containing the normalized event. |
 
-Each event exposes `id`, `announced_at`, `summary`, `url`, `provider`, and `source_url`.
+Each event exposes `id`, `announced_at`, `summary`, `url`, `provider`, `source_url`,
+and `kind`. New feed events have `kind = "committed"`. Existing cached events
+without a kind are restored as `"confirmed"` so pending notifications retain their meaning.
 Timestamps are UTC ISO 8601 strings. `url` links to the original announcement;
 `source_url` identifies the tracker supplying the data.
+`announced_at` is the signal post's timestamp, not the future reset deadline.
+Any committed timing window remains in `summary`.
 
 ### Custom Jinja2 payloads
 
@@ -117,7 +122,7 @@ preset = "discord"
 body_template = '''
 {
   "embeds": [{
-    "title": "Codex reset confirmed",
+    "title": {{ ("Codex reset " ~ event.kind) | tojson }},
     "description": {{ event.summary | limit_utf16(4096) | tojson }},
     "url": {{ event.url | tojson }},
     "timestamp": {{ event.announced_at | tojson }},
@@ -140,17 +145,19 @@ overridden through `headers`. Redirect responses are not followed.
 ## Providers and polling
 
 Providers run sequentially in configured order. The first successful HTTP fetch
-and parse ends the poll, even if there are no confirmed resets or no changes.
+and parse ends the poll, even if there is no active commitment or no change.
 Errors advance to the next provider. Polling begins immediately, then follows
 the configured cadence without overlap; slow polls skip missed ticks.
 
 The built-in `codex_reset` provider reads
-[codex-reset.com's public timeline](https://codex-reset.com/api/timeline).
-It accepts only `group = "reset"` and `announcement_state = "announced"`,
-following the [tracker's documented reset rule](https://codex-reset.com/developers).
-Predictions, advance signals, banked grants, and boosts do not notify.
-Entries with missing, null, or unrecognized announcement states are skipped without
-failing the fetch; they are not assumed to be confirmed resets.
+[codex-reset.com's public feed](https://codex-reset.com/api/feed).
+It reads the top-level `signal` object when `active = true` and `kind = "signal"`.
+The provider maps `tweet_id` to the event ID, `at` to `announced_at`, and carries
+the commitment's `summary` and original `url` into the notification.
+Missing, null, inactive, or unrelated signals are successful empty results.
+A malformed active signal fails that provider, allowing the next provider to run.
+The provider does not scan raw tweets or completed reset events in the feed.
+Model forecasts, banked grants, and boosts do not notify.
 Provider HTTP 429 responses create a persisted cooldown of at least 60 seconds,
 respecting longer Retry-After values.
 
@@ -159,12 +166,19 @@ Unseen events at or beyond the stored announcement timestamp watermark qualify;
 older history and previously recorded announcements do not replay.
 Equal timestamps can contain distinct new events, and the watermark never moves
 backward. Summary edits to an existing announcement do not send another alert.
+Commitments use a separate cache watermark from the former completed-reset timeline.
+Upgrading preserves existing events and pending deliveries while allowing the current
+active commitment to notify even if its post predates the last completed reset.
+The feed exposes one current headline signal, so commitments that appear and disappear
+between polls cannot be recovered as historical catch-up.
 
 To add a provider, implement the `Provider` protocol in `src/reset_tracker/providers.py`:
 provide a stable `name` and `fetch(httpx.Client) -> list[ResetEvent]`, then register
 a zero-argument factory in `PROVIDERS`. Raise `ProviderError` for invalid source
 data, and return an empty list for a valid response without qualifying resets.
 Use the original announcement URL consistently to deduplicate fallback results.
+Providers for the same commitment stream should set `cache_namespace = "committed"`
+to share its initialization state and watermark.
 
 ## Delivery and recovery
 

@@ -24,20 +24,18 @@ def smoke(directory: Path) -> None:
             pass
 
         def do_GET(self):
+            assert self.path == "/api/feed"
             state["gets"] += 1
             body = json.dumps(
                 {
-                    "events": [
-                        {
-                            "id": str(number),
-                            "group": "reset",
-                            "announcement_state": "announced",
-                            "announced_at": f"2026-01-01T12:00:0{number}Z",
-                            "summary": f"Reset {number}",
-                            "url": f"https://example.com/resets/{number}",
-                        }
-                        for number in range(1, state["latest"] + 1)
-                    ]
+                    "signal": {
+                        "tweet_id": str(state["latest"]),
+                        "kind": "signal",
+                        "active": True,
+                        "at": f"2026-01-01T12:00:0{state['latest']}Z",
+                        "summary": f"Committed reset {state['latest']}",
+                        "url": f"https://example.com/resets/{state['latest']}",
+                    }
                 }
             ).encode()
             self.send_response(200)
@@ -48,6 +46,7 @@ def smoke(directory: Path) -> None:
 
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert payload["event"]["kind"] == "committed"
             state["posts"].append(payload["event"]["id"])
             self.send_response(503 if state["fail"] else 200)
             self.send_header("Content-Length", "0")
@@ -68,7 +67,7 @@ def smoke(directory: Path) -> None:
     # Only the mock endpoint is substituted. All CLI, HTTP, parsing and persistence code is real.
     bootstrap = (
         "from reset_tracker.providers import CodexResetProvider; "
-        f"CodexResetProvider.endpoint = {base_url + '/api/timeline'!r}; "
+        f"CodexResetProvider.endpoint = {base_url + '/api/feed'!r}; "
         "from reset_tracker.cli import main; raise SystemExit(main())"
     )
     environment = {
@@ -100,12 +99,15 @@ def smoke(directory: Path) -> None:
             connection.execute("UPDATE deliveries SET next_attempt_at = 0")
             connection.execute("UPDATE endpoint_state SET cooldown_until = 0")
         state["fail"] = False
+        state["latest"] = 3
+        invoke(0)
+        assert state["posts"] == ["2", "2", "3"], state
         state["latest"] = 4
         invoke(0)
         assert state["posts"] == ["2", "2", "3", "4"], state
         invoke(0)
         assert state["posts"] == ["2", "2", "3", "4"], state
-        assert state["gets"] == 3, state
+        assert state["gets"] == 4, state
         with sqlite3.connect(database) as connection:
             assert (
                 connection.execute(

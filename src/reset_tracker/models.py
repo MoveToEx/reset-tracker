@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -35,6 +36,7 @@ class ResetEvent:
     url: str
     provider: str
     source_url: str
+    kind: Literal["confirmed", "committed"] = "confirmed"
 
     @property
     def identity(self) -> str:
@@ -53,6 +55,7 @@ class ResetEvent:
             "url": self.url,
             "provider": self.provider,
             "source_url": self.source_url,
+            "kind": self.kind,
         }
 
     @classmethod
@@ -64,8 +67,9 @@ def sample_event() -> ResetEvent:
     return ResetEvent(
         id="sample-reset",
         announced_at=datetime(2026, 1, 1, 12, tzinfo=UTC),
-        summary="A new global Codex reset has been confirmed.",
+        summary="An upcoming global Codex reset has been committed.",
         url="https://example.com/announcements/sample-reset",
         provider="codex_reset",
         source_url="https://codex-reset.com/",
+        kind="committed",
     )

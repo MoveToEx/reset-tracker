@@ -23,7 +23,7 @@ def make_event():
             id=str(number),
             announced_at=sample_event().announced_at + timedelta(seconds=number),
             url=f"https://example.com/announcements/{number}",
-            summary=f"Confirmed reset {number}",
+            summary=f"Reset {number}",
         )
         return replace(event, **changes)
 

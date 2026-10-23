@@ -94,7 +94,14 @@ class Store:
             (key, value),
         )
 
-    def record_snapshot(self, events: list[ResetEvent], webhook_ids: list[str], now: float) -> int:
+    def record_snapshot(
+        self,
+        events: list[ResetEvent],
+        webhook_ids: list[str],
+        now: float,
+        *,
+        cache_namespace: str | None = None,
+    ) -> int:
         # Freeze one snapshot before writing: duplicates cannot enqueue two deliveries.
         by_identity = {}
         for event in sorted(events, key=lambda item: (item.announced_at, item.identity)):
@@ -102,9 +109,10 @@ class Store:
         snapshot = sorted(by_identity.values(), key=lambda item: (item.announced_at, item.identity))
         detected_at = timestamp_text(datetime.fromtimestamp(now, UTC))
         queued = 0
+        prefix = f"{cache_namespace}:" if cache_namespace else ""
         with self.connection:
-            initialized = self._metadata("initialized") == "1"
-            watermark = self._metadata("watermark")
+            initialized = self._metadata(prefix + "initialized") == "1"
+            watermark = self._metadata(prefix + "watermark")
             first_latest = snapshot[-1].identity if snapshot else None
             for event in snapshot:
                 event_time = timestamp_text(event.announced_at)
@@ -129,8 +137,8 @@ class Store:
             if snapshot:
                 latest = timestamp_text(snapshot[-1].announced_at)
                 if watermark is None or latest > watermark:
-                    self._set_metadata("watermark", latest)
-            self._set_metadata("initialized", "1")
+                    self._set_metadata(prefix + "watermark", latest)
+            self._set_metadata(prefix + "initialized", "1")
         return queued
 
     def provider_ready(self, provider: str, now: float) -> bool:

@@ -13,7 +13,7 @@ preset = "discord"
 # body_template = '''
 # {
 #   "embeds": [{
-#     "title": "Codex reset confirmed",
+#     "title": {{ ("Codex reset " ~ event.kind) | tojson }},
 #     "description": {{ event.summary | limit_utf16(4096) | tojson }},
 #     "url": {{ event.url | tojson }},
 #     "timestamp": {{ event.announced_at | tojson }},

@@ -122,6 +122,47 @@ def test_provider_cooldown_survives_restart(make_settings, make_event):
     assert len(requests) == 1
 
 
+def test_feed_commitments_are_not_hidden_by_legacy_timeline_watermark(
+    make_settings,
+    make_event,
+):
+    settings = make_settings()
+    completed = make_event(9, kind="confirmed")
+    committed = make_event(1, kind="committed")
+    payload = {
+        "signal": {
+            "tweet_id": committed.id,
+            "summary": committed.summary,
+            "at": committed.to_dict()["announced_at"],
+            "url": committed.url,
+            "active": True,
+            "kind": "signal",
+        }
+    }
+    with (
+        Store(settings.database_path) as store,
+        httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        ) as client,
+    ):
+        store.record_snapshot([completed], ["first"], 1000)
+        previous = store.heads(["first"])[0]
+        store.delivered(previous.id, "first")
+        tracker = Tracker(settings, store, client, clock=Clock())
+        assert tracker.poll()
+        assert store.heads(["first"])[0].event == committed
+        assert store._metadata("watermark") == completed.to_dict()["announced_at"]
+        assert store._metadata("committed:watermark") == committed.to_dict()["announced_at"]
+    with (
+        Store(settings.database_path) as store,
+        httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        ) as client,
+    ):
+        assert Tracker(settings, store, client, clock=Clock()).poll()
+        assert store.pending_count(["first"]) == 1
+
+
 def test_retry_recovery_endpoint_isolation_and_order(make_settings, make_event):
     settings = make_settings(
         webhooks=(
