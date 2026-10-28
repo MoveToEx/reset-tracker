@@ -18,7 +18,15 @@ def smoke(directory: Path) -> None:
     database = directory / "state.sqlite3"
     if database.exists():
         raise RuntimeError("smoke directory must not already contain state.sqlite3")
-    state = {"latest": 2, "confirmed": False, "fail": True, "posts": [], "gets": 0}
+    state = {
+        "latest": 2,
+        "confirmed": False,
+        "follow_up": False,
+        "next_reset": False,
+        "fail": True,
+        "posts": [],
+        "gets": 0,
+    }
     base_time = datetime.now(UTC) - timedelta(hours=1)
     deadline = (base_time + timedelta(days=1)).isoformat(timespec="microseconds")
 
@@ -45,6 +53,43 @@ def smoke(directory: Path) -> None:
                     if state["confirmed"]
                     else []
                 }
+                if state["confirmed"]:
+                    payload["events"].append(
+                        {
+                            "id": "4-other",
+                            "group": "reset",
+                            "announcement_state": "announced",
+                            "announced_at": (base_time + timedelta(seconds=6)).isoformat(),
+                            "observed_at": (base_time + timedelta(seconds=6)).isoformat(),
+                            "summary": "Another post about reset 4",
+                            "url": "https://example.com/resets/4-other",
+                        }
+                    )
+                if state["follow_up"]:
+                    payload["events"].insert(
+                        0,
+                        {
+                            "id": "4-later",
+                            "group": "reset",
+                            "announcement_state": "announced",
+                            "announced_at": (base_time + timedelta(seconds=60)).isoformat(),
+                            "summary": "Follow-up post about reset 4",
+                            "url": "https://example.com/resets/4-later",
+                        },
+                    )
+                if state["next_reset"]:
+                    payload["events"].insert(
+                        0,
+                        {
+                            "id": "5",
+                            "group": "reset",
+                            "announcement_state": "announced",
+                            "announced_at": (base_time + timedelta(seconds=600)).isoformat(),
+                            "observed_at": (base_time + timedelta(seconds=600)).isoformat(),
+                            "summary": "A genuinely separate reset",
+                            "url": "https://example.com/resets/5",
+                        },
+                    )
             else:
                 payload = {
                     "official_signal": {
@@ -91,6 +136,7 @@ def smoke(directory: Path) -> None:
                 assert event["probability"] is None
                 assert event["expected_at"] is None
                 assert event["effective_at"] is not None
+                assert event["occurrence_id"].startswith("reset-")
             state["posts"].append((event["kind"], event["id"]))
             self.send_response(503 if state["fail"] else 200)
             self.send_header("Content-Length", "0")
@@ -104,6 +150,7 @@ def smoke(directory: Path) -> None:
     config.write_text(
         'user_agent = "smoke/1.0 (+mailto:smoke@example.com)"\n'
         'database_path = "state.sqlite3"\n'
+        "confirmation_dedup_window_seconds = 120\n"
         '[[webhooks]]\nid = "test"\n'
         f'url = "{base_url}/webhook"\n',
         encoding="utf-8",
@@ -156,19 +203,29 @@ def smoke(directory: Path) -> None:
         invoke(0)
         expected = [("forecast", n) for n in ("2", "2", "3", "4")] + [("confirmed", "4")]
         assert state["posts"] == expected, state
+        state["follow_up"] = True
         invoke(0)
         assert state["posts"] == expected, state
-        assert state["gets"] == 12, state
+        state["next_reset"] = True
+        invoke(0)
+        expected += [("confirmed", "5")]
+        assert state["posts"] == expected, state
+        invoke(0)
+        assert state["posts"] == expected, state
+        assert state["gets"] == 16, state
         with sqlite3.connect(database) as connection:
             assert (
                 connection.execute(
                     "SELECT COUNT(*) FROM deliveries WHERE status = 'delivered'"
                 ).fetchone()[0]
-                == 4
+                == 5
             )
+            assert connection.execute("SELECT COUNT(*) FROM reset_occurrences").fetchone()[0] == 2
+            assert connection.execute("SELECT COUNT(*) FROM reset_sources").fetchone()[0] == 4
         print(
             "Smoke passed: HTTP collection, failed-send recovery, process restart, "
-            "chronological catch-up, forecast-to-confirmation transition, and no replay."
+            "chronological catch-up, forecast-to-confirmation transition, "
+            "persistent multi-post deduplication, and no replay."
         )
     finally:
         server.shutdown()

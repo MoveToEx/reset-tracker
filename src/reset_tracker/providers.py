@@ -72,8 +72,14 @@ class CodexResetProvider:
                     raise ValueError(f"invalid confirmed reset field: {field}")
             announced_at = parse_timestamp(item["announced_at"])
             effective_at = _optional_timestamp(item.get("effective_at"), "effective_at")
+            effective_at_source = "effective_at" if effective_at is not None else None
             if effective_at is None:
                 effective_at = _optional_timestamp(item.get("observed_at"), "observed_at")
+                if effective_at is not None:
+                    effective_at_source = "observed_at"
+            reset_id = item.get("reset_id")
+            if reset_id is not None and (not isinstance(reset_id, str) or not reset_id.strip()):
+                raise ValueError("invalid confirmed reset field: reset_id")
             if announced_at > now or (effective_at is not None and effective_at > now):
                 continue
             events.append(
@@ -86,6 +92,8 @@ class CodexResetProvider:
                     source_url="https://codex-reset.com/",
                     kind="confirmed",
                     effective_at=effective_at,
+                    effective_at_source=effective_at_source,
+                    reset_id=reset_id,
                 )
             )
         return events

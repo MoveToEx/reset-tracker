@@ -43,6 +43,10 @@ class ResetEvent:
     window_label: str | None = None
     expected_at: datetime | None = None
     effective_at: datetime | None = None
+    effective_at_source: Literal["effective_at", "observed_at"] | None = None
+    reset_id: str | None = None
+    scope: str = "global"
+    occurrence_id: str | None = None
 
     @property
     def identity(self) -> str:
@@ -78,6 +82,10 @@ class ResetEvent:
             "window_label": self.window_label,
             "expected_at": timestamp_text(self.expected_at) if self.expected_at else None,
             "effective_at": timestamp_text(self.effective_at) if self.effective_at else None,
+            "effective_at_source": self.effective_at_source,
+            "reset_id": self.reset_id,
+            "scope": self.scope,
+            "occurrence_id": self.occurrence_id,
         }
 
     @classmethod

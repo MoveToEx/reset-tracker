@@ -113,6 +113,10 @@ def test_legacy_pending_payloads_remain_usable_without_probabilities(tmp_path, m
             "window_label",
             "expected_at",
             "effective_at",
+            "effective_at_source",
+            "reset_id",
+            "scope",
+            "occurrence_id",
         ):
             del legacy_payload[field]
         with store.connection:
@@ -123,4 +127,4 @@ def test_legacy_pending_payloads_remain_usable_without_probabilities(tmp_path, m
         restored = store.heads(["first"])[0].event
         assert restored.kind == kind
         assert restored.probability is None
-        assert restored == event
+        assert replace(restored, occurrence_id=None) == event

@@ -38,6 +38,7 @@ class Settings:
     providers: tuple[str, ...] = ("codex_reset",)
     interval_seconds: int = 600
     request_timeout_seconds: float = 20
+    confirmation_dedup_window_seconds: int = 1800
 
 
 def _expand(value: str) -> str:
@@ -78,6 +79,7 @@ def load_config(path: str | Path) -> Settings:
                 "providers",
                 "interval_seconds",
                 "request_timeout_seconds",
+                "confirmation_dedup_window_seconds",
                 "webhooks",
             },
             "configuration",
@@ -97,6 +99,9 @@ def load_config(path: str | Path) -> Settings:
         timeout = data.get("request_timeout_seconds", 20)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ConfigError("request_timeout_seconds must be a positive finite number")
+        dedup_window = data.get("confirmation_dedup_window_seconds", 1800)
+        if type(dedup_window) is not int or dedup_window < 0:
+            raise ConfigError("confirmation_dedup_window_seconds must be a nonnegative integer")
         providers = data.get("providers", ["codex_reset"])
         if (
             not isinstance(providers, list)
@@ -199,6 +204,7 @@ def load_config(path: str | Path) -> Settings:
             providers=tuple(providers),
             interval_seconds=interval,
             request_timeout_seconds=float(timeout),
+            confirmation_dedup_window_seconds=dedup_window,
         )
     except ConfigError:
         raise

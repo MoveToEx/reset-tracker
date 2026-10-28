@@ -41,6 +41,7 @@ per database; horizontal replication is outside this version's scope.
 ```toml
 interval_seconds = 600
 request_timeout_seconds = 20
+confirmation_dedup_window_seconds = 1800
 database_path = "/data/reset-tracker.sqlite3"
 user_agent = "reset-tracker/0.1.0 (+mailto:${CONTACT_EMAIL})"
 providers = ["codex_reset"]
@@ -55,6 +56,9 @@ Relative database and template paths resolve from the configuration file's direc
 `interval_seconds` must be at least 60. Provider names and webhook IDs must be unique;
 an ID uses 1–100 letters, digits, underscores, or hyphens. Unknown fields are rejected.
 The required User-Agent identifies your project/version and a contact URL or email.
+`confirmation_dedup_window_seconds` is a nonnegative integer, defaulting to 1800
+(30 minutes). Set it to 0 to disable approximate time-window grouping while retaining
+post identity and explicit reset-ID/effect-time matching.
 
 Environment references use `${NAME}`. They are expanded in URLs, headers, the
 User-Agent, database path, and template file paths. An undefined reference fails
@@ -81,6 +85,12 @@ For confirmations, `effective_at` is the timeline's `effective_at`, falling back
 `observed_at` when supplied. It is otherwise `null`; `announced_at` always retains
 the source's announcement timestamp. Confirmations carry no forecast probability or
 expected window. Use `event.kind` in custom templates to distinguish the two alerts.
+Confirmed webhook events also expose a persistent `occurrence_id`, shared by all
+posts grouped as the same reset. It is `null` on forecasts and preview samples.
+`reset_id` is an optional upstream reset identifier; `scope` defaults to `"global"`.
+`effective_at_source` distinguishes an explicit `"effective_at"` from an
+`"observed_at"` fallback, and is `null` if the source or a legacy payload did not
+provide that provenance. An observation time alone is not an exact reset identity.
 
 Forecasts also expose numeric percentage fields, each on a **0–100** scale:
 
@@ -214,14 +224,47 @@ Events use normalized original announcement URLs and their kind to deduplicate a
 providers. The same post can generate one forecast and one later confirmation,
 including when its legacy commitment alert was already sent. Confirmations previously
 cached by the original timeline provider are preserved without duplicate notifications.
-Deduplication is per source post: different posts describing the same physical reset
-remain separate confirmations, even when they share an effect/observation timestamp.
-After initialization, such posts can produce multiple notifications for one reset.
-Unseen events at or beyond their stream's stored timestamp watermark qualify;
+Confirmed resets are additionally grouped into persistent occurrences:
+
+- A matching upstream reset ID from the same tracker and scope takes precedence.
+  An identical explicit effect time and scope also matches, unless explicit IDs
+  from that tracker conflict. The current API does not supply a shared reset ID;
+  optional `reset_id` metadata is supported when provided by a source.
+- Otherwise, confirmations with compatible evidence and the same scope join the
+  nearest occurrence within `confirmation_dedup_window_seconds` of its anchor.
+  Distinct explicit IDs or distinct explicit effect times keep resets separate.
+  With time-window grouping disabled, matching observation timestamps alone do not
+  merge posts.
+- The anchor is the first known confirmation's effect/observation/announcement
+  time. It stays fixed, including when a late source predates it. The comparison
+  uses the absolute distance from that anchor. Supporting posts never extend the
+  window or advance its watermark, preventing a chain of posts from indefinitely
+  merging later resets.
+- All posts and their original payloads are retained in `events`, with associations
+  in `reset_sources` and stable groups in `reset_occurrences`. Each endpoint gets
+  one queued delivery per occurrence. Supporting sources discovered in a later poll
+  or after restart are recorded without resending or changing the queued message.
+  The notification links to the group's first known post.
+
+Grouping by time is a heuristic: two genuine resets inside the configured window
+can merge when no conflicting explicit evidence is available, and a late follow-up
+outside it can be treated as a separate reset. Adjust or disable the window to
+choose that tradeoff; fully reliable grouping requires an upstream occurrence ID.
+Forecasts retain their independent post identities and probability snapshots.
+
+Unseen occurrences (or forecast posts) at or beyond their stream's timestamp watermark qualify;
 older history and previously recorded announcements do not replay.
 Equal timestamps can contain distinct new events, and the watermark never moves
 backward. Summary edits, probability changes, and refreshed calculation timestamps
 alone do not send another alert.
+SQLite schema version 2 automatically groups existing confirmation records using
+the configured window when upgrading. Previously delivered notifications and all
+attempt history remain recorded. Pending duplicates of the same occurrence and
+endpoint are marked with `superseded_by` and excluded from dispatch; if any duplicate
+was already delivered, none of the others is sent. Otherwise the oldest queued
+delivery retains its retry state. Existing pauses, cooldowns, and watermarks remain.
+Changing the window afterward affects new associations and does not regroup saved
+occurrences or replay past notifications. No database deletion is needed.
 Forecasts and confirmations use separate initialization states and cache watermarks,
 independent of the former timeline and feed providers. A newer forecast cannot
 suppress an older reset confirmation. On upgrade, the confirmed stream sends only
@@ -332,6 +375,7 @@ uv run python tests/smoke.py
 The smoke script uses real local HTTP servers and separate CLI processes. It
 verifies collection, a persisted failed send, restart recovery, ordered catch-up,
 the transition from forecast to confirmation for the same post, and no replay,
+including multiple supporting posts arriving together and after process restart,
 without contacting an actual reset site or messaging service.
 It advances the saved retry deadline to avoid a 30-second wait.
 To run it inside the production image with a persistent Docker volume:

@@ -1,5 +1,8 @@
 interval_seconds = 600
 request_timeout_seconds = 20
+# Group confirmation posts within 30 minutes of an occurrence's fixed first timestamp.
+# Set to 0 to disable time-window grouping; explicit reset IDs/effect times still match.
+confirmation_dedup_window_seconds = 1800
 database_path = "/data/reset-tracker.sqlite3"
 user_agent = "reset-tracker/0.1.0 (+mailto:${CONTACT_EMAIL})"
 providers = ["codex_reset"]

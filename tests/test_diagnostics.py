@@ -173,7 +173,7 @@ def test_cli_failure_boundaries_log_details_and_exit(
     capsys,
     monkeypatch,
 ):
-    def fail_store(path):
+    def fail_store(path, **kwargs):
         raise failure
 
     monkeypatch.setattr("reset_tracker.cli.Store", fail_store)

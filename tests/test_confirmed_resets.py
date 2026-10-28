@@ -39,6 +39,7 @@ def test_confirmed_reset_records_actual_observation_without_forecast_probabiliti
     assert event.url == RESET["url"]
     assert event.announced_at == datetime(2026, 1, 2, 10, tzinfo=UTC)
     assert event.effective_at == datetime(2026, 1, 2, 12, tzinfo=UTC)
+    assert event.effective_at_source == "observed_at"
     assert event.recorded_at == event.effective_at
     assert event.probability is event.probability_24h is event.probability_48h is None
     assert event.expected_at is event.window_label is None
@@ -79,6 +80,7 @@ def test_documented_confirmation_does_not_require_undocumented_flags_or_effect_t
 def test_explicit_effect_time_takes_precedence_over_observation():
     (event,) = parse({**RESET, "effective_at": "2026-01-02T11:00:00+00:00"})
     assert event.effective_at == datetime(2026, 1, 2, 11, tzinfo=UTC)
+    assert event.effective_at_source == "effective_at"
 
 
 @pytest.mark.parametrize(
@@ -101,6 +103,8 @@ def test_malformed_timeline_fails(payload):
         {"announced_at": "2026-01-02T10:00:00"},
         {"effective_at": 12},
         {"observed_at": "bad"},
+        {"reset_id": ""},
+        {"reset_id": 123},
     ],
 )
 def test_invalid_confirmed_event_fails(changes):
@@ -213,7 +217,7 @@ def test_same_post_forecast_then_confirmation_is_delivered_once_each_after_resta
 def test_independent_initial_latest_and_chronological_confirmed_catch_up(tmp_path, make_event):
     path = tmp_path / "state.sqlite3"
     forecasts = [make_event(100), make_event(200)]
-    resets = [make_event(i, kind="confirmed") for i in (2, 1)]
+    resets = [make_event(i, kind="confirmed", reset_id=f"reset-{i}") for i in (2, 1)]
     with Store(path) as store:
         assert (
             store.record_snapshots({"forecast": forecasts, "confirmed": resets}, ["first"], 1000)
@@ -225,7 +229,7 @@ def test_independent_initial_latest_and_chronological_confirmed_catch_up(tmp_pat
         assert store.heads(["first"])[0].event.id == "200"
         store.delivered(store.heads(["first"])[0].id, "first")
     with Store(path) as store:
-        later = [make_event(i, kind="confirmed") for i in (4, 3)]
+        later = [make_event(i, kind="confirmed", reset_id=f"reset-{i}") for i in (4, 3)]
         assert (
             store.record_snapshots(
                 {"forecast": forecasts, "confirmed": resets + later}, ["first"], 1001
@@ -238,7 +242,9 @@ def test_independent_initial_latest_and_chronological_confirmed_catch_up(tmp_pat
             store.delivered(head.id, "first")
         assert store._metadata("forecast:watermark") == forecasts[-1].to_dict()["announced_at"]
         assert store._metadata("confirmed:watermark") == later[0].to_dict()["announced_at"]
-        same_time = replace(later[0], id="5", url="https://example.com/resets/5")
+        same_time = replace(
+            later[0], id="5", url="https://example.com/resets/5", reset_id="reset-5"
+        )
         assert store.record_snapshot([same_time], ["first"], 1002, cache_namespace="confirmed") == 1
         assert store.record_snapshot(resets, ["first"], 1003, cache_namespace="confirmed") == 0
         assert store._metadata("confirmed:watermark") == later[0].to_dict()["announced_at"]
@@ -253,7 +259,7 @@ def test_late_confirmation_uses_effect_time_for_order_and_watermark(tmp_path, ma
         assert (
             store.record_snapshot([older_post], ["first"], 1001, cache_namespace="confirmed") == 1
         )
-        assert store.heads(["first"])[0].event == older_post
+        assert replace(store.heads(["first"])[0].event, occurrence_id=None) == older_post
         assert store._metadata("confirmed:watermark") == timestamp_text(NOW)
 
 

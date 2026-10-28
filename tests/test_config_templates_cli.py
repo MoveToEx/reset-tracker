@@ -32,6 +32,7 @@ def test_load_defaults_and_resolve_database_path(config_path):
     config = load_config(config_path)
     assert config.interval_seconds == 600
     assert config.request_timeout_seconds == 20
+    assert config.confirmation_dedup_window_seconds == 1800
     assert config.providers == ("codex_reset",)
     assert config.database_path == config_path.parent / "state/tracker.sqlite3"
     assert config.webhooks[0].url.endswith("/SECRET")
@@ -43,6 +44,14 @@ def test_missing_environment_variable(config_path, monkeypatch):
         load_config(config_path)
 
 
+@pytest.mark.parametrize("seconds", [0, 120, 3600])
+def test_confirmation_grouping_window_is_configurable(config_path, seconds):
+    config_path.write_text(
+        f"confirmation_dedup_window_seconds = {seconds}\n" + BASE, encoding="utf-8"
+    )
+    assert load_config(config_path).confirmation_dedup_window_seconds == seconds
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -50,6 +59,10 @@ def test_missing_environment_variable(config_path, monkeypatch):
         "interval_seconds = true\n",
         "request_timeout_seconds = 0\n",
         "request_timeout_seconds = nan\n",
+        "confirmation_dedup_window_seconds = -1\n",
+        "confirmation_dedup_window_seconds = true\n",
+        "confirmation_dedup_window_seconds = 30.5\n",
+        'confirmation_dedup_window_seconds = "1800"\n',
         "providers = []\n",
         'providers = ["unknown"]\n',
         'providers = ["codex_reset", "codex_reset"]\n',

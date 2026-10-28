@@ -70,7 +70,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 body = json.dumps(json.loads(body), ensure_ascii=False, indent=2)
             print(body)
             return 0
-        with Store(settings.database_path) as store:
+        with Store(
+            settings.database_path,
+            confirmation_dedup_window_seconds=settings.confirmation_dedup_window_seconds,
+        ) as store:
             if args.command == "retry-failed":
                 ids = [item.id for item in settings.webhooks]
                 if args.webhook:
