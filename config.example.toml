@@ -1,4 +1,6 @@
 interval_seconds = 600
+# Confirmations use a separate schedule (minimum 60 seconds).
+confirmation_interval_seconds = 120
 request_timeout_seconds = 20
 # Group confirmation posts within 30 minutes of an occurrence's fixed first timestamp.
 # Set to 0 to disable time-window grouping; explicit reset IDs/effect times still match.

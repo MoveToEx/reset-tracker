@@ -18,35 +18,34 @@ class Provider(Protocol):
     def fetch(self, client: httpx.Client) -> list[ResetEvent]: ...
 
 
+class ConfirmationProvider(Provider, Protocol):
+    def fetch_confirmations(self, client: httpx.Client) -> list[ResetEvent]: ...
+
+
 class CodexResetProvider:
     name = "codex_reset"
     endpoint = "https://codex-reset.com/api/forecast"
     timeline_endpoint = "https://codex-reset.com/api/timeline"
-    cache_namespaces = ("forecast", "confirmed")
+    cache_namespace = "forecast"
 
     def __init__(self, *, clock: Callable[[], datetime] | None = None):
         self.clock = clock or (lambda: datetime.now(UTC))
 
     def fetch(self, client: httpx.Client) -> list[ResetEvent]:
-        now = self.clock()
         response = client.get(self.endpoint)
         response.raise_for_status()
         try:
-            events = self.parse(response.json(), now=now)
+            return self.parse(response.json(), now=self.clock())
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise ProviderError("invalid forecast response") from exc
+
+    def fetch_confirmations(self, client: httpx.Client) -> list[ResetEvent]:
         response = client.get(self.timeline_endpoint)
         response.raise_for_status()
         try:
-            confirmed = self.parse_confirmed(response.json(), now=now)
+            return self.parse_confirmed(response.json(), now=self.clock())
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise ProviderError("invalid timeline response") from exc
-        # Published snapshots may refresh separately. A newer timeline confirmation
-        # also invalidates an already fulfilled forecast from an older snapshot.
-        latest_reset = max((event.recorded_at for event in confirmed), default=None)
-        return [
-            event for event in events if latest_reset is None or event.announced_at > latest_reset
-        ] + confirmed
 
     @staticmethod
     def parse_confirmed(payload: object, *, now: datetime | None = None) -> list[ResetEvent]:

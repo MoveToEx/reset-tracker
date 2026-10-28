@@ -39,6 +39,7 @@ class Settings:
     interval_seconds: int = 600
     request_timeout_seconds: float = 20
     confirmation_dedup_window_seconds: int = 1800
+    confirmation_interval_seconds: int = 120
 
 
 def _expand(value: str) -> str:
@@ -78,6 +79,7 @@ def load_config(path: str | Path) -> Settings:
                 "database_path",
                 "providers",
                 "interval_seconds",
+                "confirmation_interval_seconds",
                 "request_timeout_seconds",
                 "confirmation_dedup_window_seconds",
                 "webhooks",
@@ -96,6 +98,9 @@ def load_config(path: str | Path) -> Settings:
         interval = data.get("interval_seconds", 600)
         if type(interval) is not int or interval < 60:
             raise ConfigError("interval_seconds must be an integer of at least 60")
+        confirmation_interval = data.get("confirmation_interval_seconds", 120)
+        if type(confirmation_interval) is not int or confirmation_interval < 60:
+            raise ConfigError("confirmation_interval_seconds must be an integer of at least 60")
         timeout = data.get("request_timeout_seconds", 20)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ConfigError("request_timeout_seconds must be a positive finite number")
@@ -203,6 +208,7 @@ def load_config(path: str | Path) -> Settings:
             webhooks=tuple(webhooks),
             providers=tuple(providers),
             interval_seconds=interval,
+            confirmation_interval_seconds=confirmation_interval,
             request_timeout_seconds=float(timeout),
             confirmation_dedup_window_seconds=dedup_window,
         )

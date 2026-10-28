@@ -113,7 +113,7 @@ def test_invalid_confirmed_event_fails(changes):
 
 
 @pytest.mark.parametrize("failure", ["invalid_json", "malformed", "http", "network"])
-def test_timeline_failure_advances_fallback_without_committing_partial_streams(
+def test_timeline_failure_advances_confirmation_fallback_without_fetching_forecast(
     failure, make_settings
 ):
     settings = make_settings()
@@ -131,7 +131,11 @@ def test_timeline_failure_advances_fallback_without_committing_partial_streams(
             raise httpx.ReadTimeout("timeline timeout", request=request)
         return httpx.Response(429, headers={"Retry-After": "1200"})
 
-    fallback = FakeProvider("fallback", [])
+    class Fallback(FakeProvider):
+        def fetch_confirmations(self, client):
+            return self.fetch(client)
+
+    fallback = Fallback("fallback", [])
     with (
         Store(settings.database_path) as store,
         httpx.Client(transport=httpx.MockTransport(handle)) as client,
@@ -143,12 +147,12 @@ def test_timeline_failure_advances_fallback_without_committing_partial_streams(
             providers=[CodexResetProvider(clock=lambda: NOW), fallback],
             clock=Clock(),
         )
-        assert tracker.poll()
+        assert tracker.poll_confirmations()
         assert fallback.calls == ["fallback"]
         assert store._metadata("forecast:initialized") is None
-        assert store._metadata("confirmed:initialized") is None
-        assert store.provider_ready("codex_reset", 1001) == (failure != "http")
-    assert calls == ["/api/forecast", "/api/timeline"]
+        assert store._metadata("confirmed:initialized") == "1"
+        assert store.provider_ready("codex_reset:confirmed", 1001) == (failure != "http")
+    assert calls == ["/api/timeline"]
 
 
 def test_invalid_timeline_retains_exception_cause():
@@ -156,7 +160,7 @@ def test_invalid_timeline_retains_exception_cause():
         transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
     ) as client:
         with pytest.raises(ProviderError, match="invalid timeline response") as error:
-            CodexResetProvider(clock=lambda: NOW).fetch(client)
+            CodexResetProvider(clock=lambda: NOW).fetch_confirmations(client)
     assert isinstance(error.value.__cause__, ValueError)
 
 

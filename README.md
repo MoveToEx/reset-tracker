@@ -40,6 +40,7 @@ per database; horizontal replication is outside this version's scope.
 
 ```toml
 interval_seconds = 600
+confirmation_interval_seconds = 120
 request_timeout_seconds = 20
 confirmation_dedup_window_seconds = 1800
 database_path = "/data/reset-tracker.sqlite3"
@@ -53,7 +54,9 @@ preset = "discord"
 ```
 
 Relative database and template paths resolve from the configuration file's directory.
-`interval_seconds` must be at least 60. Provider names and webhook IDs must be unique;
+`interval_seconds` controls forecast polling (default 600 seconds).
+`confirmation_interval_seconds` independently controls confirmation polling (default
+120 seconds). Both must be integers of at least 60. Provider names and webhook IDs must be unique;
 an ID uses 1–100 letters, digits, underscores, or hyphens. Unknown fields are rejected.
 The required User-Agent identifies your project/version and a contact URL or email.
 `confirmation_dedup_window_seconds` is a nonnegative integer, defaulting to 1800
@@ -187,24 +190,32 @@ overridden through `headers`. Redirect responses are not followed.
 
 ## Providers and polling
 
-Providers run sequentially in configured order. The first successful HTTP fetch
-and parse ends the poll, even if there are no qualifying events or no change.
-Errors advance to the next provider. Polling begins immediately, then follows
-the configured cadence without overlap; slow polls skip missed ticks.
+Each stream invokes providers sequentially in configured order. The first successful
+HTTP fetch and parse ends that stream's poll, even if there are no qualifying events
+or no change. Errors advance to the next eligible provider. Both streams poll
+immediately at startup, then follow independent fixed cadences: forecasts every
+`interval_seconds` (600 by default) and confirmations every
+`confirmation_interval_seconds` (120 by default). Runs remain sequential without
+overlap; slow requests skip missed ticks independently. Delivery retries have their
+own deadlines and do not trigger additional provider requests.
 
 The built-in `codex_reset` provider reads
 [codex-reset.com's forecast endpoint](https://codex-reset.com/api/forecast) and
-[timeline endpoint](https://codex-reset.com/api/timeline) during each poll. Both
-responses must fetch and parse successfully before either stream is committed;
-failure on either endpoint advances to the next configured provider.
+[timeline endpoint](https://codex-reset.com/api/timeline) on their respective
+schedules. Confirmation ticks request only the timeline; forecast ticks request
+only the forecast endpoint. Each successful stream commits its own cache changes
+and deliveries atomically. A failure or cooldown in one stream does not prevent
+the other stream from collecting or delivering events.
 It reads the top-level `official_signal` object, which does not require the
 feed endpoint's `active` field.
 The provider maps `tweet_id` to the event ID, `at` to `announced_at`, and carries
 the signal's `summary`, original `url`, probabilities, and announced window
 into the notification. Missing, null, empty, or explicitly inactive official signals
 are successful empty results. A signal is skipped if a reset has occurred at or after
-its announcement, or if its announced window has expired. Timeline confirmations
-also suppress fulfilled forecasts when the forecast snapshot has not refreshed yet.
+its announcement, or if its announced window has expired. Persisted confirmation
+occurrences also suppress fulfilled forecasts when the forecast snapshot has not
+refreshed yet, without an extra timeline request. Confirmations run first when both
+streams are due, so this check includes any newly observed reset.
 Malformed official signals or invalid probability values fail that provider,
 allowing the next provider to run.
 Cadence estimates alone, without an official signal, do not trigger notifications.
@@ -217,8 +228,9 @@ are skipped until due. When provided, the effect/observation time orders confirm
 events and advances their watermark; otherwise the announcement timestamp is used.
 The provider does not infer a reset from a forecast's probability, deadline, or
 an undocumented `confirmed` flag.
-Provider HTTP 429 responses create a persisted cooldown of at least 60 seconds,
-respecting longer Retry-After values.
+Provider HTTP 429 responses create a persisted cooldown for that stream of at least
+60 seconds, respecting longer Retry-After values. Existing whole-provider cooldowns
+from earlier versions are honored until they expire.
 
 Events use normalized original announcement URLs and their kind to deduplicate across
 providers. The same post can generate one forecast and one later confirmation,
@@ -280,11 +292,14 @@ provide a stable `name` and `fetch(httpx.Client) -> list[ResetEvent]`, then regi
 a zero-argument factory in `PROVIDERS`. Raise `ProviderError` for invalid source
 data, and return an empty list for a valid response without qualifying resets.
 Use the original announcement URL consistently to deduplicate fallback results.
-Providers for one stream can set `cache_namespace = "forecast"` (or `"confirmed"`)
-to share its initialization state and watermark. Providers returning both kinds
-should set `cache_namespaces = ("forecast", "confirmed")`; these streams, their
-watermarks, and their queued deliveries are committed in one transaction, including
-initialization of valid empty streams.
+Forecast providers should set `cache_namespace = "forecast"` to share its
+initialization state and watermark. For independent confirmation polling, also
+implement the optional `ConfirmationProvider` method
+`fetch_confirmations(httpx.Client) -> list[ResetEvent]`, returning confirmed events.
+The confirmation schedule skips providers without that method and uses the shared
+`"confirmed"` namespace. Existing providers implementing only `fetch` continue on
+the original `interval_seconds` schedule. Each stream initializes valid empty
+snapshots and queues deliveries in the same transaction as its watermark update.
 
 ## Delivery and recovery
 
@@ -341,10 +356,12 @@ uv run reset-tracker --config config.toml retry-failed
 ```
 
 For local use, change `database_path` to `data/reset-tracker.sqlite3` and export
-the variables referenced in the configuration. `once` fetches once and drains
+the variables referenced in the configuration. `once` polls both streams once
+(confirmations first), then drains
 currently due deliveries without waiting for future retry deadlines.
-It exits 0 when a provider succeeds and no configured deliveries remain pending,
-1 for unavailable providers, pending deliveries, or storage failures, and 2 for
+It exits 0 when both streams succeed and no configured deliveries remain pending,
+1 when either stream's providers are unavailable, deliveries remain pending, or
+storage fails, and 2 for
 configuration errors. `retry-failed` only resumes paused endpoints; the next run
 performs delivery. In a live service, resumption is noticed within 60 seconds.
 `validate`, `preview`, and `presets` make no network requests and do not open the database.
@@ -377,7 +394,8 @@ verifies collection, a persisted failed send, restart recovery, ordered catch-up
 the transition from forecast to confirmation for the same post, and no replay,
 including multiple supporting posts arriving together and after process restart,
 without contacting an actual reset site or messaging service.
-It advances the saved retry deadline to avoid a 30-second wait.
+It also verifies separate endpoint polling schedules in a fresh process using a
+virtual clock, and advances the saved retry deadline to avoid a 30-second wait.
 To run it inside the production image with a persistent Docker volume:
 
 ```sh

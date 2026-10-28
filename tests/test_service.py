@@ -128,7 +128,7 @@ def test_forecasts_are_not_hidden_by_legacy_timeline_watermark(
     make_event,
 ):
     settings = make_settings()
-    completed = make_event(9, kind="confirmed")
+    completed = make_event(9, kind="confirmed", effective_at=datetime(2026, 1, 1, 11, tzinfo=UTC))
     forecast = make_event(1)
     payload = {
         "official_signal": {
@@ -159,6 +159,10 @@ def test_forecasts_are_not_hidden_by_legacy_timeline_watermark(
         ) as client,
     ):
         store.record_snapshot([completed], ["first"], 1000)
+        # Legacy versions used the announcement timestamp, which can be newer
+        # than a valid forecast for a reset following the actual effect time.
+        with store.connection:
+            store._set_metadata("watermark", completed.to_dict()["announced_at"])
         previous = store.heads(["first"])[0]
         store.delivered(previous.id, "first")
         tracker = Tracker(settings, store, client, providers=[provider], clock=Clock())

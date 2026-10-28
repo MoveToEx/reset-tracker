@@ -361,6 +361,10 @@ class Store:
         ).fetchone()
         return row is None or row["cooldown_until"] <= now
 
+    def latest_confirmed_at(self) -> datetime | None:
+        row = self.connection.execute("SELECT MAX(anchor_at) FROM reset_occurrences").fetchone()
+        return parse_timestamp(row[0]) if row[0] is not None else None
+
     def cool_provider(self, provider: str, until: float) -> None:
         with self.connection:
             self.connection.execute(

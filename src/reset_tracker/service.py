@@ -40,49 +40,85 @@ class Tracker:
             remember_webhook(webhook.url, webhook.headers)
 
     def poll(self) -> bool:
+        return self._poll("forecast")
+
+    def poll_confirmations(self) -> bool:
+        return self._poll("confirmed")
+
+    def _poll(self, stream: str) -> bool:
+        eligible = False
         for provider in self.providers:
-            if not self.store.provider_ready(provider.name, self.clock()):
-                logger.info("provider=%s outcome=cooldown", provider.name)
+            fetch = (
+                getattr(provider, "fetch_confirmations", None)
+                if stream == "confirmed"
+                else provider.fetch
+            )
+            if fetch is None:
+                continue
+            eligible = True
+            state_id = f"{provider.name}:{stream}"
+            # Honor old whole-provider cooldowns until they expire. New failures
+            # cool down only the affected endpoint/stream.
+            if not all(
+                self.store.provider_ready(key, self.clock()) for key in (provider.name, state_id)
+            ):
+                logger.info("provider=%s stream=%s outcome=cooldown", provider.name, stream)
                 continue
             try:
-                events = provider.fetch(self.client)
+                events = fetch(self.client)
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 delay = retry_delay(exc.response, self.clock())
                 if status == 429 or delay is not None:
-                    self.store.cool_provider(provider.name, self.clock() + max(60, delay or 0))
+                    self.store.cool_provider(state_id, self.clock() + max(60, delay or 0))
                 log_exception(
                     logging.WARNING,
-                    "provider=%s outcome=http_error status=%s",
+                    "provider=%s stream=%s outcome=http_error status=%s",
                     provider.name,
+                    stream,
                     status,
                 )
                 continue
             except (httpx.HTTPError, ProviderError) as exc:
                 log_exception(
                     logging.WARNING,
-                    "provider=%s outcome=failed error=%s",
+                    "provider=%s stream=%s outcome=failed error=%s",
                     provider.name,
+                    stream,
                     type(exc).__name__,
                 )
                 continue
-            namespaces = getattr(provider, "cache_namespaces", None)
-            if namespaces is None:
-                snapshots = {getattr(provider, "cache_namespace", None): events}
+            if stream == "confirmed":
+                snapshots = {"confirmed": [event for event in events if event.kind == "confirmed"]}
             else:
-                snapshots = {
-                    namespace: [event for event in events if event.kind == namespace]
-                    for namespace in namespaces
-                }
+                latest_reset = self.store.latest_confirmed_at()
+                events = [
+                    event
+                    for event in events
+                    if event.kind != "forecast"
+                    or latest_reset is None
+                    or event.announced_at > latest_reset
+                ]
+                namespaces = getattr(provider, "cache_namespaces", None)
+                if namespaces is None:
+                    snapshots = {getattr(provider, "cache_namespace", None): events}
+                else:
+                    snapshots = {
+                        namespace: [event for event in events if event.kind == namespace]
+                        for namespace in namespaces
+                    }
             queued = self.store.record_snapshots(snapshots, list(self.webhooks), self.clock())
             logger.info(
-                "provider=%s outcome=success resets=%s queued=%s",
+                "provider=%s stream=%s outcome=success resets=%s queued=%s",
                 provider.name,
+                stream,
                 len(events),
                 queued,
             )
             return True
-        logger.warning("poll outcome=all_providers_unavailable")
+        if stream == "confirmed" and not eligible:
+            return True
+        logger.warning("poll stream=%s outcome=all_providers_unavailable", stream)
         return False
 
     def dispatch_due(self) -> tuple[int, int]:
@@ -145,12 +181,13 @@ class Tracker:
         return attempted, failed
 
     def once(self) -> bool:
+        confirmed = self.poll_confirmations()
         fetched = self.poll()
         while True:
             attempted, _ = self.dispatch_due()
             if not attempted:
                 break
-        return fetched and self.store.pending_count(list(self.webhooks)) == 0
+        return fetched and confirmed and self.store.pending_count(list(self.webhooks)) == 0
 
     def run(
         self,
@@ -158,18 +195,34 @@ class Tracker:
         *,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        next_poll = monotonic()
-        interval = self.settings.interval_seconds
+        started_at = monotonic()
+        next_polls = {}
+        intervals = {
+            "confirmed": self.settings.confirmation_interval_seconds,
+            "forecast": self.settings.interval_seconds,
+        }
+        polls = {"confirmed": self.poll_confirmations, "forecast": self.poll}
+        # Confirmations run first when both streams are due, so a newly confirmed
+        # occurrence can suppress an already fulfilled forecast using durable state.
+        if any(getattr(provider, "fetch_confirmations", None) for provider in self.providers):
+            next_polls["confirmed"] = started_at
+        next_polls["forecast"] = started_at
         while not stop.is_set():
-            if monotonic() >= next_poll:
-                self.poll()
-                # Retain the original cadence and skip ticks missed during a slow fetch.
-                next_poll += (math.floor((monotonic() - next_poll) / interval) + 1) * interval
+            for stream, next_poll in next_polls.items():
+                if stop.is_set():
+                    break
+                if monotonic() >= next_poll:
+                    polls[stream]()
+                    interval = intervals[stream]
+                    # Preserve each cadence and skip its missed ticks independently.
+                    next_polls[stream] += (
+                        math.floor((monotonic() - next_poll) / interval) + 1
+                    ) * interval
             if stop.is_set():
                 break
             self.dispatch_due()
             heads = self.store.heads(list(self.webhooks))
-            wait = next_poll - monotonic()
+            wait = min(next_polls.values()) - monotonic()
             if heads:
                 wait = min(wait, min(head.due_at for head in heads) - self.clock())
             stop.wait(max(0, min(60, wait)))

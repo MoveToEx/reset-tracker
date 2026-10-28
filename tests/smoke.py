@@ -26,6 +26,7 @@ def smoke(directory: Path) -> None:
         "fail": True,
         "posts": [],
         "gets": 0,
+        "get_paths": [],
     }
     base_time = datetime.now(UTC) - timedelta(hours=1)
     deadline = (base_time + timedelta(days=1)).isoformat(timespec="microseconds")
@@ -37,6 +38,7 @@ def smoke(directory: Path) -> None:
         def do_GET(self):
             assert self.path in {"/api/forecast", "/api/timeline"}
             state["gets"] += 1
+            state["get_paths"].append(self.path)
             if self.path == "/api/timeline":
                 payload = {
                     "events": [
@@ -156,12 +158,12 @@ def smoke(directory: Path) -> None:
         encoding="utf-8",
     )
     # Only the mock endpoint is substituted. All CLI, HTTP, parsing and persistence code is real.
-    bootstrap = (
+    provider_bootstrap = (
         "from reset_tracker.providers import CodexResetProvider; "
         f"CodexResetProvider.endpoint = {base_url + '/api/forecast'!r}; "
         f"CodexResetProvider.timeline_endpoint = {base_url + '/api/timeline'!r}; "
-        "from reset_tracker.cli import main; raise SystemExit(main())"
     )
+    bootstrap = provider_bootstrap + "from reset_tracker.cli import main; raise SystemExit(main())"
     environment = {
         **os.environ,
         "NO_PROXY": "localhost,127.0.0.1",
@@ -213,6 +215,62 @@ def smoke(directory: Path) -> None:
         invoke(0)
         assert state["posts"] == expected, state
         assert state["gets"] == 16, state
+        # Exercise the real scheduler and HTTP client with a virtual clock in a
+        # fresh process. Loading a non-default interval also checks config wiring.
+        config.write_text(
+            "confirmation_interval_seconds = 180\n" + config.read_text(), encoding="utf-8"
+        )
+        schedule_bootstrap = (
+            provider_bootstrap
+            + """
+import sys
+import httpx
+from reset_tracker.config import load_config
+from reset_tracker.service import Tracker
+from reset_tracker.storage import Store
+
+class Clock:
+    now = 0
+    def __call__(self):
+        return self.now
+
+clock = Clock()
+class Stop:
+    def is_set(self):
+        return clock.now >= 601
+    def wait(self, seconds):
+        clock.now += min(seconds, 601 - clock.now)
+
+settings = load_config(sys.argv[1])
+with Store(
+    settings.database_path,
+    confirmation_dedup_window_seconds=settings.confirmation_dedup_window_seconds,
+) as store:
+    with httpx.Client(
+        timeout=settings.request_timeout_seconds,
+        headers={'User-Agent': settings.user_agent},
+    ) as client:
+        Tracker(settings, store, client, clock=clock).run(Stop(), monotonic=clock)
+"""
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", schedule_bootstrap, str(config)],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"Unexpected scheduler result: {result.stdout}\n{result.stderr}")
+        assert state["get_paths"][16:] == [
+            "/api/timeline",
+            "/api/forecast",
+            "/api/timeline",
+            "/api/timeline",
+            "/api/timeline",
+            "/api/forecast",
+        ], state
+        assert state["posts"] == expected, state
         with sqlite3.connect(database) as connection:
             assert (
                 connection.execute(
@@ -225,7 +283,7 @@ def smoke(directory: Path) -> None:
         print(
             "Smoke passed: HTTP collection, failed-send recovery, process restart, "
             "chronological catch-up, forecast-to-confirmation transition, "
-            "persistent multi-post deduplication, and no replay."
+            "persistent multi-post deduplication, separate polling schedules, and no replay."
         )
     finally:
         server.shutdown()

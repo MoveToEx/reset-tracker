@@ -47,7 +47,7 @@ def test_fetch_uses_forecast_endpoint_and_identifies_reader():
     ) as client:
         (event,) = CodexResetProvider(clock=lambda: NOW).fetch(client)
     assert event.probability == 93
-    assert paths == ["/api/forecast", "/api/timeline"]
+    assert paths == ["/api/forecast"]
 
 
 @pytest.mark.parametrize(

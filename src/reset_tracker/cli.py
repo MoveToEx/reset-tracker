@@ -97,7 +97,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
                 for signum in (signal.SIGINT, signal.SIGTERM):
                     signal.signal(signum, shutdown)
-                logger.info("service outcome=started interval=%s", settings.interval_seconds)
+                logger.info(
+                    "service outcome=started forecast_interval=%s confirmation_interval=%s",
+                    settings.interval_seconds,
+                    settings.confirmation_interval_seconds,
+                )
                 tracker.run(stop)
                 logger.info("service outcome=stopped")
                 return 0

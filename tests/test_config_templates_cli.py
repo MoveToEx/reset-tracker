@@ -31,6 +31,7 @@ def config_path(tmp_path, monkeypatch):
 def test_load_defaults_and_resolve_database_path(config_path):
     config = load_config(config_path)
     assert config.interval_seconds == 600
+    assert config.confirmation_interval_seconds == 120
     assert config.request_timeout_seconds == 20
     assert config.confirmation_dedup_window_seconds == 1800
     assert config.providers == ("codex_reset",)
@@ -52,11 +53,21 @@ def test_confirmation_grouping_window_is_configurable(config_path, seconds):
     assert load_config(config_path).confirmation_dedup_window_seconds == seconds
 
 
+@pytest.mark.parametrize("seconds", [60, 120, 900])
+def test_confirmation_polling_interval_is_configurable(config_path, seconds):
+    config_path.write_text(f"confirmation_interval_seconds = {seconds}\n" + BASE, encoding="utf-8")
+    assert load_config(config_path).confirmation_interval_seconds == seconds
+
+
 @pytest.mark.parametrize(
     "change",
     [
         "interval_seconds = 59\n",
         "interval_seconds = true\n",
+        "confirmation_interval_seconds = 59\n",
+        "confirmation_interval_seconds = true\n",
+        "confirmation_interval_seconds = 120.0\n",
+        'confirmation_interval_seconds = "120"\n',
         "request_timeout_seconds = 0\n",
         "request_timeout_seconds = nan\n",
         "confirmation_dedup_window_seconds = -1\n",
