@@ -73,7 +73,7 @@ container. The application does not load dotenv files itself.
 
 | Preset | Body |
 | --- | --- |
-| `discord` | A rich embed labeled “Codex reset forecast” or “Codex reset confirmed”. Forecasts include probabilities and the expected window; confirmations include the effect/observation time when available. Both include source links and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
+| `discord` | A rich embed labeled “🔄 Codex reset forecast” or “✅ Codex reset confirmed”. Forecasts include probabilities and the expected window; confirmations include the effect/observation time when available. Both include source links and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
 | `generic_json` | `{"event": {...}, "detected_at": "..."}` containing the normalized event. |
 
 Each event exposes `id`, `announced_at`, `summary`, `url`, `provider`, `source_url`,
@@ -162,7 +162,10 @@ preset = "discord"
 body_template = '''
 {
   "embeds": [{
-    "title": {{ ("Codex reset " ~ event.kind) | tojson }},
+    "title": {{ (
+      {"forecast": "🔄 ", "confirmed": "✅ "}.get(event.kind, "")
+      ~ "Codex reset " ~ event.kind
+    ) | tojson }},
     "description": {{ event.summary | limit_utf16(4096) | tojson }},
     "url": {{ event.url | tojson }},
     "timestamp": {{ event.announced_at | tojson }},

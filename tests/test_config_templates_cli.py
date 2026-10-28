@@ -261,7 +261,7 @@ def test_discord_is_bounded_credited_and_preserves_query_parameters(summary):
     request = render_request(webhook, event, "now")
     payload = json.loads(request.body)
     embed = payload["embeds"][0]
-    assert embed["title"] == "Codex reset forecast"
+    assert embed["title"] == "🔄 Codex reset forecast"
     assert len(embed["description"].encode("utf-16-le")) // 2 <= 4096
     assert embed["url"] == event.url
     assert embed["timestamp"] == event.to_dict()["announced_at"]
@@ -330,7 +330,7 @@ def test_preview_prints_rich_json_object(config_path, capsys):
     assert main(["--config", str(config_path), "preview", "--webhook", "first"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert isinstance(payload, dict)
-    assert payload["embeds"][0]["title"] == "Codex reset forecast"
+    assert payload["embeds"][0]["title"] == "🔄 Codex reset forecast"
     fields = {field["name"]: field["value"] for field in payload["embeds"][0]["fields"]}
     assert fields["Signal probability"] == "93%"
 

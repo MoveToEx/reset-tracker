@@ -34,7 +34,10 @@ _BUILTIN_TEMPLATES = {
 {
   "embeds": [
     {
-      "title": {{ ("Codex reset " ~ event.kind) | tojson }},
+      "title": {{ (
+        {"forecast": "🔄 ", "confirmed": "✅ "}.get(event.kind, "")
+        ~ "Codex reset " ~ event.kind
+      ) | tojson }},
       "url": {{ event.url | tojson }},
       "description": {{ event.summary | limit_utf16(4096) | tojson }},
       "timestamp": {{ event.announced_at | tojson }},

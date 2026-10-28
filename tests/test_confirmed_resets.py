@@ -328,7 +328,7 @@ def test_confirmation_webhooks_label_actual_reset_and_include_effect_time(preset
         assert payload == {"event": event.to_dict(), "detected_at": "detected-now"}
     else:
         embed = payload["embeds"][0]
-        assert embed["title"] == "Codex reset confirmed"
+        assert embed["title"] == "✅ Codex reset confirmed"
         assert embed["description"] == event.summary
         fields = {f["name"]: f["value"] for f in embed["fields"]}
         assert fields["Reset effective at (UTC)"] == "2026-01-02T12:00:00.000000Z"
