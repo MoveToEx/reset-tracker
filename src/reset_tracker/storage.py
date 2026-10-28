@@ -102,43 +102,74 @@ class Store:
         *,
         cache_namespace: str | None = None,
     ) -> int:
+        return self.record_snapshots({cache_namespace: events}, webhook_ids, now)
+
+    def record_snapshots(
+        self,
+        snapshots: dict[str | None, list[ResetEvent]],
+        webhook_ids: list[str],
+        now: float,
+    ) -> int:
+        """Commit all streams and their deliveries together, with separate watermarks."""
+        with self.connection:
+            return sum(
+                self._record_snapshot(events, webhook_ids, now, namespace)
+                for namespace, events in snapshots.items()
+            )
+
+    def _record_snapshot(
+        self,
+        events: list[ResetEvent],
+        webhook_ids: list[str],
+        now: float,
+        cache_namespace: str | None,
+    ) -> int:
         # Freeze one snapshot before writing: duplicates cannot enqueue two deliveries.
         by_identity = {}
-        for event in sorted(events, key=lambda item: (item.announced_at, item.identity)):
+        for event in sorted(events, key=lambda item: (item.recorded_at, item.identity)):
             by_identity[event.identity] = event
-        snapshot = sorted(by_identity.values(), key=lambda item: (item.announced_at, item.identity))
+        snapshot = sorted(by_identity.values(), key=lambda item: (item.recorded_at, item.identity))
         detected_at = timestamp_text(datetime.fromtimestamp(now, UTC))
         queued = 0
         prefix = f"{cache_namespace}:" if cache_namespace else ""
-        with self.connection:
-            initialized = self._metadata(prefix + "initialized") == "1"
-            watermark = self._metadata(prefix + "watermark")
-            first_latest = snapshot[-1].identity if snapshot else None
-            for event in snapshot:
-                event_time = timestamp_text(event.announced_at)
-                inserted = self.connection.execute(
-                    "INSERT OR IGNORE INTO events(identity, announced_at, payload) "
-                    "VALUES (?, ?, ?)",
-                    (event.identity, event_time, json.dumps(event.to_dict(), ensure_ascii=False)),
-                ).rowcount
-                should_notify = (
-                    event.identity == first_latest
-                    if not initialized
-                    else watermark is None or event_time >= watermark
-                )
-                if inserted and should_notify:
-                    for webhook_id in webhook_ids:
-                        queued += self.connection.execute(
-                            "INSERT OR IGNORE INTO deliveries"
-                            "(event_identity, webhook_id, detected_at, next_attempt_at) "
-                            "VALUES (?, ?, ?, ?)",
-                            (event.identity, webhook_id, detected_at, now),
-                        ).rowcount
-            if snapshot:
-                latest = timestamp_text(snapshot[-1].announced_at)
-                if watermark is None or latest > watermark:
-                    self._set_metadata(prefix + "watermark", latest)
-            self._set_metadata(prefix + "initialized", "1")
+        initialized = self._metadata(prefix + "initialized") == "1"
+        watermark = self._metadata(prefix + "watermark")
+        first_latest = snapshot[-1].identity if snapshot else None
+        for event in snapshot:
+            event_time = timestamp_text(event.recorded_at)
+            if event.kind == "confirmed":
+                legacy = self.connection.execute(
+                    "SELECT payload FROM events WHERE identity = ?",
+                    (event.identity.removeprefix("confirmed:"),),
+                ).fetchone()
+                # Preserve deliveries made by the original timeline provider, but
+                # a legacy commitment for the same post must not hide confirmation.
+                if legacy and json.loads(legacy["payload"]).get("kind", "confirmed") == "confirmed":
+                    continue
+            inserted = self.connection.execute(
+                # The historical column name holds the stream's ordering timestamp;
+                # the payload retains the original announcement and effect times.
+                "INSERT OR IGNORE INTO events(identity, announced_at, payload) VALUES (?, ?, ?)",
+                (event.identity, event_time, json.dumps(event.to_dict(), ensure_ascii=False)),
+            ).rowcount
+            should_notify = (
+                event.identity == first_latest
+                if not initialized
+                else watermark is None or event_time >= watermark
+            )
+            if inserted and should_notify:
+                for webhook_id in webhook_ids:
+                    queued += self.connection.execute(
+                        "INSERT OR IGNORE INTO deliveries"
+                        "(event_identity, webhook_id, detected_at, next_attempt_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (event.identity, webhook_id, detected_at, now),
+                    ).rowcount
+        if snapshot:
+            latest = timestamp_text(snapshot[-1].recorded_at)
+            if watermark is None or latest > watermark:
+                self._set_metadata(prefix + "watermark", latest)
+        self._set_metadata(prefix + "initialized", "1")
         return queued
 
     def provider_ready(self, provider: str, now: float) -> bool:

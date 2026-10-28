@@ -18,7 +18,7 @@ def smoke(directory: Path) -> None:
     database = directory / "state.sqlite3"
     if database.exists():
         raise RuntimeError("smoke directory must not already contain state.sqlite3")
-    state = {"latest": 2, "fail": True, "posts": [], "gets": 0}
+    state = {"latest": 2, "confirmed": False, "fail": True, "posts": [], "gets": 0}
     base_time = datetime.now(UTC) - timedelta(hours=1)
     deadline = (base_time + timedelta(days=1)).isoformat(timespec="microseconds")
 
@@ -27,10 +27,26 @@ def smoke(directory: Path) -> None:
             pass
 
         def do_GET(self):
-            assert self.path == "/api/forecast"
+            assert self.path in {"/api/forecast", "/api/timeline"}
             state["gets"] += 1
-            body = json.dumps(
-                {
+            if self.path == "/api/timeline":
+                payload = {
+                    "events": [
+                        {
+                            "id": "4",
+                            "group": "reset",
+                            "announcement_state": "announced",
+                            "announced_at": (base_time + timedelta(seconds=4)).isoformat(),
+                            "observed_at": (base_time + timedelta(seconds=5)).isoformat(),
+                            "summary": "Reset 4 is now in effect",
+                            "url": "https://example.com/resets/4",
+                        }
+                    ]
+                    if state["confirmed"]
+                    else []
+                }
+            else:
+                payload = {
                     "official_signal": {
                         "tweet_id": str(state["latest"]),
                         "kind": "signal",
@@ -43,14 +59,18 @@ def smoke(directory: Path) -> None:
                             "label": "within 24 hours",
                         },
                     },
-                    "last_reset_at": (base_time - timedelta(days=1)).isoformat(),
+                    "last_reset_at": (
+                        base_time + timedelta(seconds=5)
+                        if state["confirmed"]
+                        else base_time - timedelta(days=1)
+                    ).isoformat(),
                     "probabilities": {
                         "signal_percent": 93,
                         "rounded_24h": 32,
                         "rounded_48h": 53,
                     },
                 }
-            ).encode()
+            body = json.dumps(payload).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -59,12 +79,19 @@ def smoke(directory: Path) -> None:
 
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            assert payload["event"]["kind"] == "forecast"
-            assert payload["event"]["probability"] == 93
-            assert payload["event"]["probability_24h"] == 32
-            assert payload["event"]["probability_48h"] == 53
-            assert payload["event"]["expected_at"] is not None
-            state["posts"].append(payload["event"]["id"])
+            event = payload["event"]
+            if event["kind"] == "forecast":
+                assert event["probability"] == 93
+                assert event["probability_24h"] == 32
+                assert event["probability_48h"] == 53
+                assert event["expected_at"] is not None
+                assert event["effective_at"] is None
+            else:
+                assert event["kind"] == "confirmed"
+                assert event["probability"] is None
+                assert event["expected_at"] is None
+                assert event["effective_at"] is not None
+            state["posts"].append((event["kind"], event["id"]))
             self.send_response(503 if state["fail"] else 200)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -85,6 +112,7 @@ def smoke(directory: Path) -> None:
     bootstrap = (
         "from reset_tracker.providers import CodexResetProvider; "
         f"CodexResetProvider.endpoint = {base_url + '/api/forecast'!r}; "
+        f"CodexResetProvider.timeline_endpoint = {base_url + '/api/timeline'!r}; "
         "from reset_tracker.cli import main; raise SystemExit(main())"
     )
     environment = {
@@ -106,7 +134,7 @@ def smoke(directory: Path) -> None:
 
     try:
         invoke(1)
-        assert state["posts"] == ["2"], state
+        assert state["posts"] == [("forecast", "2")], state
         with sqlite3.connect(database) as connection:
             assert connection.execute("SELECT attempts, status FROM deliveries").fetchone() == (
                 1,
@@ -118,23 +146,29 @@ def smoke(directory: Path) -> None:
         state["fail"] = False
         state["latest"] = 3
         invoke(0)
-        assert state["posts"] == ["2", "2", "3"], state
+        assert state["posts"] == [("forecast", n) for n in ("2", "2", "3")], state
         state["latest"] = 4
         invoke(0)
-        assert state["posts"] == ["2", "2", "3", "4"], state
+        assert state["posts"] == [("forecast", n) for n in ("2", "2", "3", "4")], state
         invoke(0)
-        assert state["posts"] == ["2", "2", "3", "4"], state
-        assert state["gets"] == 4, state
+        assert state["posts"] == [("forecast", n) for n in ("2", "2", "3", "4")], state
+        state["confirmed"] = True
+        invoke(0)
+        expected = [("forecast", n) for n in ("2", "2", "3", "4")] + [("confirmed", "4")]
+        assert state["posts"] == expected, state
+        invoke(0)
+        assert state["posts"] == expected, state
+        assert state["gets"] == 12, state
         with sqlite3.connect(database) as connection:
             assert (
                 connection.execute(
                     "SELECT COUNT(*) FROM deliveries WHERE status = 'delivered'"
                 ).fetchone()[0]
-                == 3
+                == 4
             )
         print(
             "Smoke passed: HTTP collection, failed-send recovery, process restart, "
-            "chronological catch-up, and no replay."
+            "chronological catch-up, forecast-to-confirmation transition, and no replay."
         )
     finally:
         server.shutdown()

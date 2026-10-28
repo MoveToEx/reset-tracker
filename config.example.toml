@@ -3,6 +3,7 @@ request_timeout_seconds = 20
 database_path = "/data/reset-tracker.sqlite3"
 user_agent = "reset-tracker/0.1.0 (+mailto:${CONTACT_EMAIL})"
 providers = ["codex_reset"]
+# Collects both future forecasts and confirmed global resets. Each sends its own alert.
 
 [[webhooks]]
 id = "discord"
@@ -39,12 +40,14 @@ preset = "discord"
 # body_template = '''
 # {
 #   "message": {{ event.summary | tojson }},
+#   "kind": {{ event.kind | tojson }},
 #   "announcement": {{ event.url | tojson }},
 #   "source": {{ event.source_url | tojson }},
 #   "probability": {{ event.probability | tojson }},
 #   "probability_24h": {{ event.probability_24h | tojson }},
 #   "probability_48h": {{ event.probability_48h | tojson }},
 #   "expected_at": {{ event.expected_at | tojson }},
+#   "effective_at": {{ event.effective_at | tojson }},
 #   "detected_at": {{ detected_at | tojson }}
 # }
 # '''

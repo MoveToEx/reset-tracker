@@ -32,10 +32,14 @@ def test_future_official_signal_carries_distinct_probabilities():
 
 
 def test_fetch_uses_forecast_endpoint_and_identifies_reader():
+    paths = []
+
     def handle(request):
-        assert request.url.path == "/api/forecast"
+        paths.append(request.url.path)
         assert request.headers["User-Agent"] == "reader/1.0 (+mailto:test@example.com)"
-        return httpx.Response(200, json=FORECAST)
+        return httpx.Response(
+            200, json=FORECAST if request.url.path == "/api/forecast" else {"events": []}
+        )
 
     with httpx.Client(
         transport=httpx.MockTransport(handle),
@@ -43,6 +47,7 @@ def test_fetch_uses_forecast_endpoint_and_identifies_reader():
     ) as client:
         (event,) = CodexResetProvider(clock=lambda: NOW).fetch(client)
     assert event.probability == 93
+    assert paths == ["/api/forecast", "/api/timeline"]
 
 
 @pytest.mark.parametrize(
@@ -77,7 +82,11 @@ def test_malformed_payload_is_provider_failure(payload):
 def test_missing_or_inactive_official_signals_are_valid_empty_results(signal):
     payload = {**FORECAST, "official_signal": signal}
     with httpx.Client(
-        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json=payload if request.url.path == "/api/forecast" else {"events": []}
+            )
+        )
     ) as client:
         assert CodexResetProvider(clock=lambda: NOW).fetch(client) == []
 

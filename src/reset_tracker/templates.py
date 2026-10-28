@@ -81,6 +81,12 @@ _BUILTIN_TEMPLATES = {
           "value": {{ event.expected_at | tojson }}
         }
         {% endif %}
+        {% if event.effective_at is not none %},
+        {
+          "name": "Reset effective at (UTC)",
+          "value": {{ event.effective_at | tojson }}
+        }
+        {% endif %}
       ]
     }
   ],

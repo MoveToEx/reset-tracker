@@ -66,12 +66,15 @@ class Tracker:
                     type(exc).__name__,
                 )
                 continue
-            queued = self.store.record_snapshot(
-                events,
-                list(self.webhooks),
-                self.clock(),
-                cache_namespace=getattr(provider, "cache_namespace", None),
-            )
+            namespaces = getattr(provider, "cache_namespaces", None)
+            if namespaces is None:
+                snapshots = {getattr(provider, "cache_namespace", None): events}
+            else:
+                snapshots = {
+                    namespace: [event for event in events if event.kind == namespace]
+                    for namespace in namespaces
+                }
+            queued = self.store.record_snapshots(snapshots, list(self.webhooks), self.clock())
             logger.info(
                 "provider=%s outcome=success resets=%s queued=%s",
                 provider.name,

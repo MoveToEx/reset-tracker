@@ -112,6 +112,7 @@ def test_legacy_pending_payloads_remain_usable_without_probabilities(tmp_path, m
             "probability_48h",
             "window_label",
             "expected_at",
+            "effective_at",
         ):
             del legacy_payload[field]
         with store.connection:

@@ -42,6 +42,7 @@ class ResetEvent:
     probability_48h: int | float | None = None
     window_label: str | None = None
     expected_at: datetime | None = None
+    effective_at: datetime | None = None
 
     @property
     def identity(self) -> str:
@@ -51,8 +52,16 @@ class ResetEvent:
         if hostname in {"twitter.com", "www.twitter.com", "www.x.com"}:
             hostname = "x.com"
         identity = urlunsplit(("https", hostname, parts.path.rstrip("/"), "", ""))
-        # A forecast with probabilities is distinct from an earlier commitment-only alert.
-        return f"forecast:{identity}" if self.kind == "forecast" else identity
+        # A source post may produce both a forecast and a later confirmation.
+        # Keep both distinct from legacy commitment-only notifications as well.
+        return f"{self.kind}:{identity}" if self.kind in {"forecast", "confirmed"} else identity
+
+    @property
+    def recorded_at(self) -> datetime:
+        """Order confirmed resets by their effect/observation time when available."""
+        if self.kind == "confirmed":
+            return self.effective_at or self.announced_at
+        return self.announced_at
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,13 +77,15 @@ class ResetEvent:
             "probability_48h": self.probability_48h,
             "window_label": self.window_label,
             "expected_at": timestamp_text(self.expected_at) if self.expected_at else None,
+            "effective_at": timestamp_text(self.effective_at) if self.effective_at else None,
         }
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ResetEvent:
         fields = {**value, "announced_at": parse_timestamp(value["announced_at"])}
-        if fields.get("expected_at") is not None:
-            fields["expected_at"] = parse_timestamp(fields["expected_at"])
+        for field in ("expected_at", "effective_at"):
+            if fields.get(field) is not None:
+                fields[field] = parse_timestamp(fields[field])
         return cls(**fields)
 
 

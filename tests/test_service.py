@@ -151,7 +151,11 @@ def test_forecasts_are_not_hidden_by_legacy_timeline_watermark(
     with (
         Store(settings.database_path) as store,
         httpx.Client(
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, json=payload if request.url.path == "/api/forecast" else {"events": []}
+                )
+            )
         ) as client,
     ):
         store.record_snapshot([completed], ["first"], 1000)
@@ -165,7 +169,11 @@ def test_forecasts_are_not_hidden_by_legacy_timeline_watermark(
     with (
         Store(settings.database_path) as store,
         httpx.Client(
-            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200, json=payload if request.url.path == "/api/forecast" else {"events": []}
+                )
+            )
         ) as client,
     ):
         assert Tracker(settings, store, client, providers=[provider], clock=Clock()).poll()

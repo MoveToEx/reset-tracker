@@ -21,18 +21,74 @@ class Provider(Protocol):
 class CodexResetProvider:
     name = "codex_reset"
     endpoint = "https://codex-reset.com/api/forecast"
-    cache_namespace = "forecast"
+    timeline_endpoint = "https://codex-reset.com/api/timeline"
+    cache_namespaces = ("forecast", "confirmed")
 
     def __init__(self, *, clock: Callable[[], datetime] | None = None):
         self.clock = clock or (lambda: datetime.now(UTC))
 
     def fetch(self, client: httpx.Client) -> list[ResetEvent]:
+        now = self.clock()
         response = client.get(self.endpoint)
         response.raise_for_status()
         try:
-            return self.parse(response.json(), now=self.clock())
+            events = self.parse(response.json(), now=now)
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise ProviderError("invalid forecast response") from exc
+        response = client.get(self.timeline_endpoint)
+        response.raise_for_status()
+        try:
+            confirmed = self.parse_confirmed(response.json(), now=now)
+        except (ValueError, TypeError, KeyError, OverflowError) as exc:
+            raise ProviderError("invalid timeline response") from exc
+        # Published snapshots may refresh separately. A newer timeline confirmation
+        # also invalidates an already fulfilled forecast from an older snapshot.
+        latest_reset = max((event.recorded_at for event in confirmed), default=None)
+        return [
+            event for event in events if latest_reset is None or event.announced_at > latest_reset
+        ] + confirmed
+
+    @staticmethod
+    def parse_confirmed(payload: object, *, now: datetime | None = None) -> list[ResetEvent]:
+        if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
+            raise ValueError("expected an events array")
+        now = now if now is not None else datetime.now(UTC)
+        events = []
+        for item in payload["events"]:
+            if not isinstance(item, dict) or not isinstance(item.get("group"), str):
+                raise ValueError("invalid timeline event")
+            # This is the tracker's documented real-reset condition. Missing state
+            # metadata is common on older entries and does not imply confirmation.
+            if item["group"] != "reset" or item.get("announcement_state") != "announced":
+                continue
+            if (
+                item.get("banked_grant") is True
+                or item.get("preview") is True
+                or item.get("scope", "global") != "global"
+            ):
+                continue
+            for field in ("id", "announced_at", "summary", "url"):
+                if not isinstance(item.get(field), str) or not item[field]:
+                    raise ValueError(f"invalid confirmed reset field: {field}")
+            announced_at = parse_timestamp(item["announced_at"])
+            effective_at = _optional_timestamp(item.get("effective_at"), "effective_at")
+            if effective_at is None:
+                effective_at = _optional_timestamp(item.get("observed_at"), "observed_at")
+            if announced_at > now or (effective_at is not None and effective_at > now):
+                continue
+            events.append(
+                ResetEvent(
+                    id=item["id"],
+                    announced_at=announced_at,
+                    summary=item["summary"],
+                    url=http_url(item["url"]),
+                    provider="codex_reset",
+                    source_url="https://codex-reset.com/",
+                    kind="confirmed",
+                    effective_at=effective_at,
+                )
+            )
+        return events
 
     @staticmethod
     def parse(payload: object, *, now: datetime | None = None) -> list[ResetEvent]:
