@@ -117,6 +117,8 @@ def test_legacy_pending_payloads_remain_usable_without_probabilities(tmp_path, m
             "reset_id",
             "scope",
             "occurrence_id",
+            "banked_state",
+            "banked_source",
         ):
             del legacy_payload[field]
         with store.connection:

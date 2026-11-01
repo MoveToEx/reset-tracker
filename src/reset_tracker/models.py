@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
+BANKED_STATES = ("unknown", "announced", "arriving", "available")
+
 
 def parse_timestamp(value: str) -> datetime:
     timestamp = datetime.fromisoformat(value)
@@ -36,7 +38,7 @@ class ResetEvent:
     url: str
     provider: str
     source_url: str
-    kind: Literal["confirmed", "committed", "forecast"] = "confirmed"
+    kind: Literal["confirmed", "committed", "forecast", "banked"] = "confirmed"
     probability: int | float | None = None
     probability_24h: int | float | None = None
     probability_48h: int | float | None = None
@@ -47,15 +49,21 @@ class ResetEvent:
     reset_id: str | None = None
     scope: str = "global"
     occurrence_id: str | None = None
+    banked_state: Literal["announced", "arriving", "available", "unknown"] | None = None
+    banked_source: str | None = None
 
     @property
     def identity(self) -> str:
-        """Original announcement URLs identify the same event across providers."""
-        parts = urlsplit(self.url)
+        """Identify posts by URL, and banked reports by tracker, event ID, and state."""
+        parts = urlsplit(self.source_url if self.kind == "banked" else self.url)
         hostname = parts.netloc.lower()
         if hostname in {"twitter.com", "www.twitter.com", "www.x.com"}:
             hostname = "x.com"
         identity = urlunsplit(("https", hostname, parts.path.rstrip("/"), "", ""))
+        if self.kind == "banked":
+            # Observations may have no original post URL. Tracker + event ID is
+            # stable if a URL is added later; each forward status is a new alert.
+            return f"banked:{identity}:{self.id}:{self.banked_state or 'unknown'}"
         # A source post may produce both a forecast and a later confirmation.
         # Keep both distinct from legacy commitment-only notifications as well.
         return f"{self.kind}:{identity}" if self.kind in {"forecast", "confirmed"} else identity
@@ -86,6 +94,8 @@ class ResetEvent:
             "reset_id": self.reset_id,
             "scope": self.scope,
             "occurrence_id": self.occurrence_id,
+            "banked_state": self.banked_state,
+            "banked_source": self.banked_source,
         }
 
     @classmethod

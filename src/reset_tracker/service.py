@@ -89,7 +89,10 @@ class Tracker:
                 )
                 continue
             if stream == "confirmed":
-                snapshots = {"confirmed": [event for event in events if event.kind == "confirmed"]}
+                snapshots = {
+                    namespace: [event for event in events if event.kind == namespace]
+                    for namespace in getattr(provider, "confirmation_namespaces", ("confirmed",))
+                }
             else:
                 latest_reset = self.store.latest_confirmed_at()
                 events = [

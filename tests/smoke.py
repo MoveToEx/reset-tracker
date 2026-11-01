@@ -23,6 +23,8 @@ def smoke(directory: Path) -> None:
         "confirmed": False,
         "follow_up": False,
         "next_reset": False,
+        "banked": None,
+        "banked_posts": [],
         "fail": True,
         "posts": [],
         "gets": 0,
@@ -92,6 +94,21 @@ def smoke(directory: Path) -> None:
                             "url": "https://example.com/resets/5",
                         },
                     )
+                if state["banked"] is not None:
+                    payload["events"].append(
+                        {
+                            "id": "banked-1",
+                            "group": "credits",
+                            "reset_kind": "banked",
+                            "banked_state": state["banked"],
+                            "announced_at": (base_time + timedelta(seconds=30)).isoformat(),
+                            "summary": "A banked reset update",
+                            "source": "observed" if state["banked"] == "available" else "archive",
+                            "url": None
+                            if state["banked"] == "available"
+                            else "https://example.com/banked/1",
+                        }
+                    )
             else:
                 payload = {
                     "official_signal": {
@@ -133,12 +150,21 @@ def smoke(directory: Path) -> None:
                 assert event["probability_48h"] == 53
                 assert event["expected_at"] is not None
                 assert event["effective_at"] is None
-            else:
-                assert event["kind"] == "confirmed"
+            elif event["kind"] == "confirmed":
                 assert event["probability"] is None
                 assert event["expected_at"] is None
                 assert event["effective_at"] is not None
                 assert event["occurrence_id"].startswith("reset-")
+            else:
+                assert event["kind"] == "banked"
+                assert event["banked_state"] in {"announced", "available"}
+                assert (
+                    event["probability"] is event["effective_at"] is event["occurrence_id"] is None
+                )
+                if event["banked_state"] == "available":
+                    assert event["url"] == "https://codex-reset.com/banked-reset"
+                    assert event["banked_source"] == "observed"
+                state["banked_posts"].append(event["banked_state"])
             state["posts"].append((event["kind"], event["id"]))
             self.send_response(503 if state["fail"] else 200)
             self.send_header("Content-Length", "0")
@@ -215,6 +241,18 @@ def smoke(directory: Path) -> None:
         invoke(0)
         assert state["posts"] == expected, state
         assert state["gets"] == 16, state
+        state["banked"] = "announced"
+        invoke(0)
+        expected += [("banked", "banked-1")]
+        assert state["posts"] == expected, state
+        state["banked"] = "available"
+        invoke(0)
+        expected += [("banked", "banked-1")]
+        assert state["posts"] == expected, state
+        invoke(0)
+        assert state["posts"] == expected, state
+        assert state["banked_posts"] == ["announced", "available"], state
+        before_schedule = len(state["get_paths"])
         # Exercise the real scheduler and HTTP client with a virtual clock in a
         # fresh process. Loading a non-default interval also checks config wiring.
         config.write_text(
@@ -262,7 +300,7 @@ with Store(
         )
         if result.returncode != 0:
             raise AssertionError(f"Unexpected scheduler result: {result.stdout}\n{result.stderr}")
-        assert state["get_paths"][16:] == [
+        assert state["get_paths"][before_schedule:] == [
             "/api/timeline",
             "/api/forecast",
             "/api/timeline",
@@ -276,14 +314,15 @@ with Store(
                 connection.execute(
                     "SELECT COUNT(*) FROM deliveries WHERE status = 'delivered'"
                 ).fetchone()[0]
-                == 5
+                == 7
             )
             assert connection.execute("SELECT COUNT(*) FROM reset_occurrences").fetchone()[0] == 2
             assert connection.execute("SELECT COUNT(*) FROM reset_sources").fetchone()[0] == 4
         print(
             "Smoke passed: HTTP collection, failed-send recovery, process restart, "
             "chronological catch-up, forecast-to-confirmation transition, "
-            "persistent multi-post deduplication, separate polling schedules, and no replay."
+            "persistent multi-post deduplication, separate polling schedules, "
+            "banked reset lifecycle, and no replay."
         )
     finally:
         server.shutdown()

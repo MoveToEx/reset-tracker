@@ -8,7 +8,7 @@ from pathlib import Path
 from types import TracebackType
 from uuid import uuid4
 
-from .models import ResetEvent, parse_timestamp, timestamp_text
+from .models import BANKED_STATES, ResetEvent, parse_timestamp, timestamp_text
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -74,6 +74,7 @@ class _Discovery:
     timestamp: str
     created: bool
     occurrence_id: str | None = None
+    force_notify: bool = False
 
 
 class Store:
@@ -307,6 +308,7 @@ class Store:
         for event in snapshot:
             event_time = timestamp_text(event.recorded_at)
             identity = event.identity
+            previous_banked_rank = self._banked_rank(event) if event.kind == "banked" else None
             if event.kind == "confirmed":
                 legacy = self.connection.execute(
                     "SELECT payload FROM events WHERE identity = ?",
@@ -330,7 +332,13 @@ class Store:
                 )
             else:
                 key = identity
-                discovery = _Discovery(identity, event_time, bool(inserted))
+                if event.kind == "banked":
+                    rank = BANKED_STATES.index(event.banked_state or "unknown")
+                    progressed = previous_banked_rank is not None and rank > previous_banked_rank
+                    created = bool(inserted) and (previous_banked_rank is None or progressed)
+                    discovery = _Discovery(identity, event_time, created, force_notify=progressed)
+                else:
+                    discovery = _Discovery(identity, event_time, bool(inserted))
             if key not in discoveries or discovery.created:
                 discoveries[key] = discovery
         ordered = sorted(discoveries.values(), key=lambda item: (item.timestamp, item.identity))
@@ -338,7 +346,7 @@ class Store:
             should_notify = (
                 index == len(ordered) - 1
                 if not initialized
-                else watermark is None or discovery.timestamp >= watermark
+                else discovery.force_notify or watermark is None or discovery.timestamp >= watermark
             )
             if discovery.created and should_notify:
                 for webhook_id in webhook_ids:
@@ -354,6 +362,20 @@ class Store:
                 self._set_metadata(prefix + "watermark", latest)
         self._set_metadata(prefix + "initialized", "1")
         return queued
+
+    def _banked_rank(self, event: ResetEvent) -> int | None:
+        stem = event.identity.rsplit(":", 1)[0] + ":"
+        rows = self.connection.execute(
+            "SELECT payload FROM events WHERE identity IN (?, ?, ?, ?)",
+            tuple(stem + state for state in BANKED_STATES),
+        ).fetchall()
+        return max(
+            (
+                BANKED_STATES.index(json.loads(row["payload"]).get("banked_state") or "unknown")
+                for row in rows
+            ),
+            default=None,
+        )
 
     def provider_ready(self, provider: str, now: float) -> bool:
         row = self.connection.execute(

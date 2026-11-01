@@ -1,0 +1,48 @@
+{
+  "events": [
+    {
+      "id": "banked-observed",
+      "group": "credits",
+      "reset_kind": "banked",
+      "banked_state": "available",
+      "banked_grant": true,
+      "source": "observed",
+      "summary": "A new banked reset reached the tracker monitoring accounts.",
+      "announced_at": "2026-01-02T12:00:00Z",
+      "url": null
+    },
+    {
+      "id": "banked-announcement",
+      "group": "credits",
+      "reset_kind": "banked",
+      "banked_state": "announced",
+      "banked_grant": false,
+      "source": "archive",
+      "summary": "A banked reset will be distributed to paid accounts.",
+      "announced_at": "2026-01-02T10:00:00Z",
+      "url": "https://x.com/example/status/banked-announcement"
+    },
+    {
+      "id": "banked-legacy",
+      "group": "credits",
+      "banked_grant": true,
+      "summary": "A historical banked reset announcement without status metadata.",
+      "announced_at": "2026-01-01T12:00:00Z",
+      "url": "https://x.com/example/status/banked-legacy"
+    },
+    {
+      "id": "global-reset",
+      "group": "reset",
+      "announcement_state": "announced",
+      "summary": "A global reset is now in effect.",
+      "announced_at": "2026-01-02T11:00:00Z",
+      "url": "https://x.com/example/status/global-reset"
+    },
+    {
+      "id": "ordinary-credits",
+      "group": "credits",
+      "banked_grant": false,
+      "summary": "Discussion of banked resets and other credits without a banked event marker."
+    }
+  ]
+}

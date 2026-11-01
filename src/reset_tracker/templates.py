@@ -34,17 +34,18 @@ _BUILTIN_TEMPLATES = {
 {
   "embeds": [
     {
-      "title": {{ (
-        {"forecast": "🔄 ", "confirmed": "✅ "}.get(event.kind, "")
-        ~ "Codex reset " ~ event.kind
-      ) | tojson }},
+      "title": {{ {
+        "forecast": "🔄 Codex reset forecast",
+        "confirmed": "✅ Codex reset confirmed",
+        "banked": "🎟️ Codex banked reset"
+      }.get(event.kind, "Codex reset " ~ event.kind) | tojson }},
       "url": {{ event.url | tojson }},
       "description": {{ event.summary | limit_utf16(4096) | tojson }},
       "timestamp": {{ event.announced_at | tojson }},
       "color": 5793266,
       "fields": [
         {
-          "name": "Announcement",
+          "name": {{ ("Source" if event.kind == "banked" else "Announcement") | tojson }},
           "value": {{ event.url | limit_utf16(500) | tojson }}
         },
         {
@@ -88,6 +89,21 @@ _BUILTIN_TEMPLATES = {
         {
           "name": "Reset effective at (UTC)",
           "value": {{ event.effective_at | tojson }}
+        }
+        {% endif %}
+        {% if event.banked_state is not none %},
+        {
+          "name": "Banked reset status",
+          "value": {{ event.banked_state | tojson }}
+        }
+        {% endif %}
+        {% if event.banked_source is not none %},
+        {
+          "name": "Reported by",
+          "value": {{ (
+            "Tracker monitoring accounts" if event.banked_source == "observed"
+            else event.banked_source | limit_utf16(150)
+          ) | tojson }}
         }
         {% endif %}
       ]

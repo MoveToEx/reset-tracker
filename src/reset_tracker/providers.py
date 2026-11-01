@@ -5,7 +5,7 @@ from typing import Protocol
 
 import httpx
 
-from .models import ResetEvent, http_url, parse_timestamp
+from .models import BANKED_STATES, ResetEvent, http_url, parse_timestamp
 
 
 class ProviderError(Exception):
@@ -27,6 +27,7 @@ class CodexResetProvider:
     endpoint = "https://codex-reset.com/api/forecast"
     timeline_endpoint = "https://codex-reset.com/api/timeline"
     cache_namespace = "forecast"
+    confirmation_namespaces = ("confirmed", "banked")
 
     def __init__(self, *, clock: Callable[[], datetime] | None = None):
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -43,25 +44,25 @@ class CodexResetProvider:
         response = client.get(self.timeline_endpoint)
         response.raise_for_status()
         try:
-            return self.parse_confirmed(response.json(), now=self.clock())
+            payload = response.json()
+            now = self.clock()
+            return self.parse_confirmed(payload, now=now) + self.parse_banked(payload, now=now)
         except (ValueError, TypeError, KeyError, OverflowError) as exc:
             raise ProviderError("invalid timeline response") from exc
 
     @staticmethod
     def parse_confirmed(payload: object, *, now: datetime | None = None) -> list[ResetEvent]:
-        if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
-            raise ValueError("expected an events array")
         now = now if now is not None else datetime.now(UTC)
         events = []
-        for item in payload["events"]:
-            if not isinstance(item, dict) or not isinstance(item.get("group"), str):
-                raise ValueError("invalid timeline event")
+        for item in _timeline_items(payload):
             # This is the tracker's documented real-reset condition. Missing state
             # metadata is common on older entries and does not imply confirmation.
             if item["group"] != "reset" or item.get("announcement_state") != "announced":
                 continue
             if (
                 item.get("banked_grant") is True
+                or item.get("reset_kind") == "banked"
+                or item.get("banked_state") is not None
                 or item.get("preview") is True
                 or item.get("scope", "global") != "global"
             ):
@@ -96,6 +97,58 @@ class CodexResetProvider:
                 )
             )
         return events
+
+    @staticmethod
+    def parse_banked(payload: object, *, now: datetime | None = None) -> list[ResetEvent]:
+        now = now if now is not None else datetime.now(UTC)
+        events = {}
+        for item in _timeline_items(payload):
+            if not (
+                item.get("reset_kind") == "banked"
+                or item.get("banked_grant") is True
+                or item.get("banked_state") is not None
+            ):
+                continue
+            state = item.get("banked_state")
+            if state is None:
+                state = "unknown"
+            if not isinstance(state, str) or state not in BANKED_STATES:
+                raise ValueError("invalid banked reset state")
+            for field in ("id", "announced_at", "summary"):
+                if not isinstance(item.get(field), str) or not item[field]:
+                    raise ValueError(f"invalid banked reset field: {field}")
+            announced_at = parse_timestamp(item["announced_at"])
+            if announced_at > now:
+                continue
+            url = item.get("url")
+            if url is None:
+                url = "https://codex-reset.com/banked-reset"
+            if not isinstance(url, str):
+                raise ValueError("invalid banked reset field: url")
+            source = item.get("source")
+            if source is not None and (not isinstance(source, str) or not source.strip()):
+                raise ValueError("invalid banked reset field: source")
+            scope = item.get("scope", "global")
+            if not isinstance(scope, str) or not scope.strip():
+                raise ValueError("invalid banked reset field: scope")
+            event = ResetEvent(
+                id=item["id"],
+                announced_at=announced_at,
+                summary=item["summary"],
+                url=http_url(url),
+                provider="codex_reset",
+                source_url="https://codex-reset.com/",
+                kind="banked",
+                banked_state=state,
+                banked_source=source,
+                scope=scope,
+            )
+            previous = events.get(event.id)
+            if previous is None or BANKED_STATES.index(state) > BANKED_STATES.index(
+                previous.banked_state
+            ):
+                events[event.id] = event
+        return list(events.values())
 
     @staticmethod
     def parse(payload: object, *, now: datetime | None = None) -> list[ResetEvent]:
@@ -156,6 +209,17 @@ class CodexResetProvider:
                 expected_at=target or end,
             )
         ]
+
+
+def _timeline_items(payload: object) -> list[dict]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("events"), list):
+        raise ValueError("expected an events array")
+    if any(
+        not isinstance(item, dict) or not isinstance(item.get("group"), str)
+        for item in payload["events"]
+    ):
+        raise ValueError("invalid timeline event")
+    return payload["events"]
 
 
 def _optional_timestamp(value: object, field: str) -> datetime | None:

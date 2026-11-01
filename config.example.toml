@@ -1,5 +1,5 @@
 interval_seconds = 600
-# Confirmations use a separate schedule (minimum 60 seconds).
+# Confirmations and banked resets share the timeline schedule (minimum 60 seconds).
 confirmation_interval_seconds = 120
 request_timeout_seconds = 20
 # Group confirmation posts within 30 minutes of an occurrence's fixed first timestamp.
@@ -8,7 +8,7 @@ confirmation_dedup_window_seconds = 1800
 database_path = "/data/reset-tracker.sqlite3"
 user_agent = "reset-tracker/0.1.0 (+mailto:${CONTACT_EMAIL})"
 providers = ["codex_reset"]
-# Collects both future forecasts and confirmed global resets. Each sends its own alert.
+# Collects forecasts, confirmed global resets, and banked reset status updates.
 
 [[webhooks]]
 id = "discord"
@@ -19,10 +19,11 @@ preset = "discord"
 # body_template = '''
 # {
 #   "embeds": [{
-#     "title": {{ (
-#       {"forecast": "🔄 ", "confirmed": "✅ "}.get(event.kind, "")
-#       ~ "Codex reset " ~ event.kind
-#     ) | tojson }},
+#     "title": {{ {
+#       "forecast": "🔄 Codex reset forecast",
+#       "confirmed": "✅ Codex reset confirmed",
+#       "banked": "🎟️ Codex banked reset"
+#     }.get(event.kind, "Codex reset " ~ event.kind) | tojson }},
 #     "description": {{ event.summary | limit_utf16(4096) | tojson }},
 #     "url": {{ event.url | tojson }},
 #     "timestamp": {{ event.announced_at | tojson }},
@@ -49,6 +50,8 @@ preset = "discord"
 # {
 #   "message": {{ event.summary | tojson }},
 #   "kind": {{ event.kind | tojson }},
+#   "banked_state": {{ event.banked_state | tojson }},
+#   "banked_source": {{ event.banked_source | tojson }},
 #   "announcement": {{ event.url | tojson }},
 #   "source": {{ event.source_url | tojson }},
 #   "probability": {{ event.probability | tojson }},

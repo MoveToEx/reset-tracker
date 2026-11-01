@@ -1,6 +1,6 @@
 # Reset tracker
 
-A Python 3.13+ service that watches official forecasts and confirmed Codex resets and sends
+A Python 3.13+ service that watches forecasts, confirmed global Codex resets, and banked resets and sends
 webhook notifications. It runs in a foreground process, with Docker Compose as the primary
 deployment method.
 
@@ -26,9 +26,11 @@ deployment method.
    ```
 
 The first successful fetch sends the **current official future-reset forecast**,
-including its reported probability, and the **latest confirmed global reset**, when
+including its reported probability, the **latest confirmed global reset**, and the
+**latest banked reset report**, when
 available. Each stream initializes independently. Later fetches send new forecasts
 and a separate confirmation after the tracker reports that a reset has taken effect.
+Banked reset announcements, rollout updates, and availability reports send separate alerts.
 An elapsed forecast deadline alone never produces a confirmation. Every newly
 discovered reset is saved in SQLite and delivered individually in chronological order.
 The container runs as UID/GID 10001. Configuration is mounted read-only, and the named
@@ -55,7 +57,7 @@ preset = "discord"
 
 Relative database and template paths resolve from the configuration file's directory.
 `interval_seconds` controls forecast polling (default 600 seconds).
-`confirmation_interval_seconds` independently controls confirmation polling (default
+`confirmation_interval_seconds` controls confirmation and banked-reset polling (default
 120 seconds). Both must be integers of at least 60. Provider names and webhook IDs must be unique;
 an ID uses 1–100 letters, digits, underscores, or hyphens. Unknown fields are rejected.
 The required User-Agent identifies your project/version and a contact URL or email.
@@ -73,13 +75,14 @@ container. The application does not load dotenv files itself.
 
 | Preset | Body |
 | --- | --- |
-| `discord` | A rich embed labeled “🔄 Codex reset forecast” or “✅ Codex reset confirmed”. Forecasts include probabilities and the expected window; confirmations include the effect/observation time when available. Both include source links and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
+| `discord` | A rich embed labeled “🔄 Codex reset forecast”, “✅ Codex reset confirmed”, or “🎟️ Codex banked reset”. Forecasts include probabilities and the expected window; confirmations include the effect/observation time; banked reports include their state and source. All include source links and tracker attribution. Mentions are disabled; `wait=true` confirms message storage. Existing query parameters such as `thread_id` are preserved. |
 | `generic_json` | `{"event": {...}, "detected_at": "..."}` containing the normalized event. |
 
 Each event exposes `id`, `announced_at`, `summary`, `url`, `provider`, `source_url`,
-and `kind`. Events have `kind = "forecast"` or `kind = "confirmed"`. Existing cached events
+and `kind`. Events have `kind = "forecast"`, `"confirmed"`, or `"banked"`. Existing cached events
 without a kind are restored as `"confirmed"` so pending notifications retain their meaning.
 Timestamps are UTC ISO 8601 strings. `url` links to the original announcement;
+banked observations without a post URL link to the tracker's banked-reset page.
 `source_url` identifies the tracker supplying the data.
 `announced_at` is the official signal post's timestamp. `expected_at` is the
 announced target time or window end, when supplied, as a UTC ISO 8601 string.
@@ -89,11 +92,18 @@ For confirmations, `effective_at` is the timeline's `effective_at`, falling back
 the source's announcement timestamp. Confirmations carry no forecast probability or
 expected window. Use `event.kind` in custom templates to distinguish the two alerts.
 Confirmed webhook events also expose a persistent `occurrence_id`, shared by all
-posts grouped as the same reset. It is `null` on forecasts and preview samples.
+posts grouped as the same reset. It is `null` on forecasts, banked events, and preview samples.
 `reset_id` is an optional upstream reset identifier; `scope` defaults to `"global"`.
 `effective_at_source` distinguishes an explicit `"effective_at"` from an
 `"observed_at"` fallback, and is `null` if the source or a legacy payload did not
 provide that provenance. An observation time alone is not an exact reset identity.
+
+Banked events expose `event.banked_state`: `"announced"`, `"arriving"`,
+`"available"`, or `"unknown"`. Missing status metadata stays `"unknown"`; the
+service does not infer availability from a grant flag or an elapsed deadline.
+`event.banked_source` carries the upstream source, such as `"observed"` or
+`"archive"`, or `null` if absent. An observed availability report refers to the
+tracker's monitoring accounts. Both fields are `null` on other event kinds.
 
 Forecasts also expose numeric percentage fields, each on a **0–100** scale:
 
@@ -121,6 +131,8 @@ body_template = '''
 {
   "text": {{ event.summary | tojson }},
   "kind": {{ event.kind | tojson }},
+  "banked_state": {{ event.banked_state | tojson }},
+  "banked_source": {{ event.banked_source | tojson }},
   "announcement": {{ event.url | tojson }},
   "source": {{ event.source_url | tojson }},
   "probability": {{ event.probability | tojson }},
@@ -162,10 +174,11 @@ preset = "discord"
 body_template = '''
 {
   "embeds": [{
-    "title": {{ (
-      {"forecast": "🔄 ", "confirmed": "✅ "}.get(event.kind, "")
-      ~ "Codex reset " ~ event.kind
-    ) | tojson }},
+    "title": {{ {
+      "forecast": "🔄 Codex reset forecast",
+      "confirmed": "✅ Codex reset confirmed",
+      "banked": "🎟️ Codex banked reset"
+    }.get(event.kind, "Codex reset " ~ event.kind) | tojson }},
     "description": {{ event.summary | limit_utf16(4096) | tojson }},
     "url": {{ event.url | tojson }},
     "timestamp": {{ event.announced_at | tojson }},
@@ -198,7 +211,8 @@ HTTP fetch and parse ends that stream's poll, even if there are no qualifying ev
 or no change. Errors advance to the next eligible provider. Both streams poll
 immediately at startup, then follow independent fixed cadences: forecasts every
 `interval_seconds` (600 by default) and confirmations every
-`confirmation_interval_seconds` (120 by default). Runs remain sequential without
+`confirmation_interval_seconds` (120 by default). Banked reset detection shares
+that timeline request and interval, without an additional API call. Runs remain sequential without
 overlap; slow requests skip missed ticks independently. Delivery retries have their
 own deadlines and do not trigger additional provider requests.
 
@@ -231,6 +245,12 @@ are skipped until due. When provided, the effect/observation time orders confirm
 events and advances their watermark; otherwise the announcement timestamp is used.
 The provider does not infer a reset from a forecast's probability, deadline, or
 an undocumented `confirmed` flag.
+Banked entries are identified by `reset_kind = "banked"`, `banked_grant = true`,
+or explicit `banked_state` metadata, including tracker observations with a null
+original URL. They are kept out of global confirmations, even when labeled with
+the timeline's `reset` group. Other credit announcements and summary text alone do
+not qualify. An already published banked announcement can be reported before its
+grant arrives; future-dated announcements are skipped until their timestamp is due.
 Provider HTTP 429 responses create a persisted cooldown for that stream of at least
 60 seconds, respecting longer Retry-After values. Existing whole-provider cooldowns
 from earlier versions are honored until they expire.
@@ -267,6 +287,18 @@ outside it can be treated as a separate reset. Adjust or disable the window to
 choose that tradeoff; fully reliable grouping requires an upstream occurrence ID.
 Forecasts retain their independent post identities and probability snapshots.
 
+Banked resets use a separate `"banked"` cache and watermark. The first successful
+timeline poll after upgrade sends only the latest banked report and caches the
+older history. Later polls deliver new reports individually in chronological order.
+Identity uses the tracker URL, event ID, and banked state, so independent observations
+without X URLs do not collide, and adding an X URL later does not resend a report.
+Forward state changes (`unknown` → `announced` → `arriving` → `available`, including
+skipped stages) notify once, even when the original post predates the banked watermark.
+Repeated or regressing states do not resend. Banked events never create global-reset
+occurrences, advance the confirmed watermark, or suppress forecasts. The confirmation
+time-window grouping applies only to global resets. This addition uses the existing
+SQLite schema and preserves pending deliveries and history.
+
 Unseen occurrences (or forecast posts) at or beyond their stream's timestamp watermark qualify;
 older history and previously recorded announcements do not replay.
 Equal timestamps can contain distinct new events, and the watermark never moves
@@ -299,6 +331,10 @@ Forecast providers should set `cache_namespace = "forecast"` to share its
 initialization state and watermark. For independent confirmation polling, also
 implement the optional `ConfirmationProvider` method
 `fetch_confirmations(httpx.Client) -> list[ResetEvent]`, returning confirmed events.
+Providers that also return banked events should declare
+`confirmation_namespaces = ("confirmed", "banked")`. Both timeline snapshots and
+their deliveries are committed atomically, with independent initialization states
+and watermarks.
 The confirmation schedule skips providers without that method and uses the shared
 `"confirmed"` namespace. Existing providers implementing only `fetch` continue on
 the original `interval_seconds` schedule. Each stream initializes valid empty
@@ -397,7 +433,8 @@ verifies collection, a persisted failed send, restart recovery, ordered catch-up
 the transition from forecast to confirmation for the same post, and no replay,
 including multiple supporting posts arriving together and after process restart,
 without contacting an actual reset site or messaging service.
-It also verifies separate endpoint polling schedules in a fresh process using a
+It also verifies banked announcement-to-availability updates, including observations
+without post URLs, and separate endpoint polling schedules in a fresh process using a
 virtual clock, and advances the saved retry deadline to avoid a 30-second wait.
 To run it inside the production image with a persistent Docker volume:
 
